@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ page_title or "myhomecircle" }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <div class="brand">MyHomeCircle</div>
+          <div class="tagline">Community • Trust • Better Homes</div>
+        </div>
+        <div class="top-actions">
+          {% if current_user %}
+            <div class="user-chip">{{ current_user.name }}</div>
+            <a class="top-link" href="{{ url_for('logout') }}">Logout</a>
+          {% else %}
+            <a class="top-link" href="{{ url_for('login_google', next=request.path if request else '/') }}">Google Login</a>
+          {% endif %}
+          <button class="menu-btn" type="button" data-action="toggle-nav">Menu</button>
+        </div>
+      </header>
+
+      <main class="main-stage">
+        <section class="screen" id="screen"></section>
+      </main>
+
+      <nav class="bottom-nav" aria-label="Primary">
+        {% for route_name, label in nav_pages %}
+          <button class="bottom-nav__item" type="button" data-view="{{ route_name }}">{{ label }}</button>
+        {% endfor %}
+      </nav>
+    </div>
+
+    <script>
+      window.__SPA_SECTIONS__ = {{ spa_sections | tojson }};
+      window.__APP_STATE__ = {
+        authed: {{ 'true' if current_user else 'false' }},
+        currentUser: {{ current_user | tojson }},
+        loginEnabled: {{ 'true' if login_enabled else 'false' }},
+      };
+    </script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>
