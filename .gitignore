@@ -211,8 +211,8 @@ tempCodeRunnerFile.py
 
 # Node / frontend
 node_modules/
-frontend/node_modules/
-frontend/dist/
+src/frontend/node_modules/
+src/frontend/dist/
 
 # Marimo
 marimo/_static/

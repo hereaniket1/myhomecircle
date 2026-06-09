@@ -1,27 +1,30 @@
 # myhomecircle
 
-Single-page application scaffold for a FastAPI + Postgres + React stack.
+Minimal Flask single-page app scaffold for Render.
 
 ## Stack
 
-- Backend: FastAPI, SQLAlchemy 2.x, Alembic, Pydantic Settings
-- Database: PostgreSQL
-- Frontend: React, Vite, TypeScript
-- Tooling: Docker Compose, lint-friendly project layout, environment-based config
+- Backend: Flask
+- Database: Postgres
+- Deployment: Render web service
+- Install: `requirements.txt`
 
-## Layout
+## Run locally
 
-- `backend/` FastAPI app, domain modules, database, and migration hooks
-- `frontend/` React SPA shell
-- `docker-compose.yml` Local app + Postgres orchestration
-- `.env.example` Shared environment template
+```bash
+pip install -r requirements.txt
+python app.py
+```
 
-## Next steps
+## Render
 
-This scaffold is intentionally minimal. The next layer would usually add:
+- Build command: `pip install -r requirements.txt`
+- Start command: `gunicorn app:app --bind 0.0.0.0:$PORT`
+- Add a Postgres database and set `DATABASE_URL`
 
-- auth
-- user/session models
-- API routers for business features
-- frontend routing, state, and data fetching
-- tests and CI
+## Files to keep
+
+- `app.py`
+- `requirements.txt`
+- `README.md`
+- `.env.example`
