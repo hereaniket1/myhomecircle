@@ -209,6 +209,11 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
