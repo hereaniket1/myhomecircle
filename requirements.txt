@@ -7,3 +7,4 @@ authlib
 fastembed
 numpy
 gunicorn
+resend
