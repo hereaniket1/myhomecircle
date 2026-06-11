@@ -1,10 +1,27 @@
+import base64
+import hashlib
+import hmac
 import os
+import secrets
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
+import psycopg2
 from flask import Flask, jsonify, render_template, request, redirect, session, url_for
+from authlib.integrations.flask_client import OAuth
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.getenv("SECRET_KEY", "dev-only-change-me")
+app.config["DATABASE_URL"] = os.getenv("DATABASE_URL", "")
+oauth = OAuth(app)
+
+google = oauth.register(
+    name="google",
+    client_id=os.getenv("GOOGLE_CLIENT_ID"),
+    client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
 
 SPA_PAGES = [
     ("home", "Home"),
@@ -16,8 +33,8 @@ SPA_PAGES = [
 
 SPA_SECTIONS = {
     "home": {
-        "title": "Hello, Aniket!",
-        "badge": "Gold • 2,450",
+        "title": "Welcome to MyHomeCircle",
+        "badge": "Guest Access",
         "hero": "Trusted vendors. Real prices. Buy together.",
         "stats": [
             {"value": "3", "label": "Active Groups"},
@@ -53,9 +70,115 @@ SPA_SECTIONS = {
     },
 }
 
+def create_connection():
+    conn = psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT") or os.getenv("DB_POST") or 5432,
+        database=os.getenv("DB_ROYALTY_DATABASE_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD")
+    )
+    conn.autocommit = False
+    return conn
+
+
+def _run_query(query, params=(), fetch=False, fetchall=False, returning=False):
+    conn = db_conn()
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            if fetchall:
+                result = cur.fetchall()
+            elif fetch or returning:
+                result = cur.fetchone()
+            else:
+                result = None
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def db_conn():
+    return create_connection()
+
+
+def fetch_one(query, params=()):
+    return _run_query(query, params, fetch=True)
+
+
+def insert_returning(query, params=()):
+    return _run_query(query, params, returning=True)
+
+
+def fetch_all(query, params=()):
+    return _run_query(query, params, fetchall=True) or []
+
+
+def execute(query, params=()):
+    _run_query(query, params)
+
+
+def query_in_transaction(conn, query, params=(), fetch=False, returning=False):
+    with conn.cursor() as cur:
+        cur.execute(query, params)
+        if fetch or returning:
+            return cur.fetchone()
+        return None
+
+
+def serialize_user(row):
+    if not row:
+        return None
+    return {
+        "id": str(row[0]),
+        "email": row[1],
+        "full_name": row[2],
+        "avatar_url": row[3],
+        "email_verified": row[4],
+        "status": row[5],
+        "last_login_at": row[6].isoformat() if row[6] else None,
+    }
+
+
+def serialize_session_user(user):
+    return {
+        "id": str(user["id"]),
+        "email": user["email"],
+        "name": user["full_name"],
+        "full_name": user["full_name"],
+        "picture": user["avatar_url"],
+        "avatar_url": user["avatar_url"],
+    }
+
 
 def current_user():
-    return session.get("google_user")
+    user_id = session.get("app_user_id")
+    if not user_id:
+        return None
+    row = fetch_one(
+        """
+        SELECT id, email, full_name, avatar_url, email_verified, status, last_login_at
+        FROM app_users
+        WHERE id = %s
+        """,
+        (user_id,),
+    )
+    if not row:
+        return None
+    user = serialize_user(row)
+    session["current_user"] = user
+    return user
+
+
+def set_session_user(user):
+    session["app_user_id"] = user["id"]
+    session["current_user"] = serialize_session_user(user)
 
 
 def login_required(view):
@@ -93,31 +216,47 @@ def spa_fallback(any_path: str):
 
 @app.get("/login/google")
 def login_google():
-    next_path = request.args.get("next", "/")
-    if os.getenv("GOOGLE_OAUTH_ENABLED", "false").lower() == "true":
-        # Hook your Google OAuth redirect here later.
-        return render_template("spa.html", page_title="Google Login", auth_prompt=True, next_path=next_path)
+    return redirect(url_for("google_login", next=request.args.get("next", "/")))
 
-    session["google_user"] = {
-        "name": os.getenv("DEFAULT_USER_NAME", "Aniket Pathak"),
-        "email": os.getenv("DEFAULT_USER_EMAIL", "aniket@example.com"),
-    }
-    return redirect(next_path or "/")
+
+@app.get("/auth/google/login")
+def google_login():
+    next_path = request.args.get("next", "/")
+    is_popup = request.args.get("popup") == "true"
+    session["next_url"] = next_path
+    session["oauth_popup"] = is_popup
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI") or url_for("google_callback", _external=True)
+    return google.authorize_redirect(redirect_uri)
 
 
 @app.get("/auth/google/callback")
 def google_callback():
-    # Lightweight dev-only callback scaffold.
-    session["google_user"] = {
-        "name": request.args.get("name", "Aniket Pathak"),
-        "email": request.args.get("email", "aniket@example.com"),
-    }
-    return redirect(request.args.get("next", "/"))
+    token = google.authorize_access_token()
+    user_info = token.get("userinfo") or google.userinfo()
+    user = upsert_google_user(user_info)
+    if not user:
+        return jsonify(error="Could not complete Google login"), 500
+    set_session_user(user)
+
+    if session.pop("oauth_popup", False):
+        return render_template("popup_callback.html")
+
+    next_url = session.pop("next_url", "/")
+    return redirect(next_url)
+
+
+@app.get("/auth/me")
+def auth_me():
+    user = current_user()
+    if not user:
+        return jsonify(authenticated=False)
+    return jsonify(authenticated=True, user=serialize_session_user(user))
 
 
 @app.get("/logout")
 def logout():
-    session.pop("google_user", None)
+    session.pop("app_user_id", None)
+    session.pop("current_user", None)
     return redirect("/")
 
 
@@ -142,6 +281,271 @@ def me():
 @app.get("/api/login-status")
 def login_status():
     return jsonify(authed=bool(current_user()), user=current_user())
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120_000)
+    return "pbkdf2_sha256$120000$%s$%s" % (
+        base64.b64encode(salt).decode("ascii"),
+        base64.b64encode(digest).decode("ascii"),
+    )
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        _, iterations, salt_b64, digest_b64 = stored.split("$", 3)
+        salt = base64.b64decode(salt_b64)
+        expected = base64.b64decode(digest_b64)
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(iterations))
+        return hmac.compare_digest(actual, expected)
+    except Exception:
+        return False
+
+
+def generate_otp():
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def upsert_google_user(user_info):
+    email = (user_info.get("email") or "").strip().lower()
+    full_name = (user_info.get("name") or "Google User").strip()
+    avatar_url = user_info.get("picture")
+    provider_user_id = user_info.get("sub") or email
+
+    conn = db_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT app_user_id
+                    FROM auth_identities
+                    WHERE provider = 'GOOGLE' AND provider_user_id = %s
+                    """,
+                    (provider_user_id,),
+                )
+                identity = cur.fetchone()
+
+                if identity:
+                    user_id = identity[0]
+                    cur.execute(
+                        """
+                        UPDATE app_users
+                        SET email = COALESCE(%s, email),
+                            full_name = COALESCE(%s, full_name),
+                            avatar_url = COALESCE(%s, avatar_url),
+                            email_verified = TRUE,
+                            last_login_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                        """,
+                        (email or None, full_name, avatar_url, user_id),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE auth_identities
+                        SET provider_email = %s,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE provider = 'GOOGLE' AND provider_user_id = %s
+                        """,
+                        (email or None, provider_user_id),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT id FROM app_users WHERE email = %s",
+                        (email,),
+                    )
+                    existing = cur.fetchone()
+                    if existing:
+                        user_id = existing[0]
+                        cur.execute(
+                            """
+                            UPDATE app_users
+                            SET full_name = COALESCE(%s, full_name),
+                                avatar_url = COALESCE(%s, avatar_url),
+                                email_verified = TRUE,
+                                last_login_at = CURRENT_TIMESTAMP,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE id = %s
+                            """,
+                            (full_name, avatar_url, user_id),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            INSERT INTO app_users (email, full_name, avatar_url, email_verified, status, last_login_at)
+                            VALUES (%s, %s, %s, TRUE, 'ACTIVE', CURRENT_TIMESTAMP)
+                            RETURNING id
+                            """,
+                            (email, full_name, avatar_url),
+                        )
+                        user_id = cur.fetchone()[0]
+
+                    cur.execute(
+                        """
+                        INSERT INTO auth_identities (app_user_id, provider, provider_user_id, provider_email)
+                        VALUES (%s, 'GOOGLE', %s, %s)
+                        ON CONFLICT (provider, provider_user_id) DO UPDATE
+                        SET app_user_id = EXCLUDED.app_user_id,
+                            provider_email = EXCLUDED.provider_email,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        (user_id, provider_user_id, email or None),
+                    )
+
+                cur.execute(
+                    "SELECT id, email, full_name, avatar_url, email_verified, status, last_login_at FROM app_users WHERE id = %s",
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        return serialize_user(row)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@app.get("/signup")
+def signup_page():
+    return render_template("spa.html", page_title="Sign up", auth_prompt=True, auth_mode="signup")
+
+
+@app.get("/login")
+def login_page():
+    return render_template("spa.html", page_title="Log in", auth_prompt=True, auth_mode="login")
+
+
+@app.post("/api/auth/signup")
+def api_signup():
+    payload = request.get_json(force=True)
+    full_name = payload.get("full_name", "").strip()
+    email = payload.get("email", "").strip().lower()
+    password = payload.get("password", "")
+    accepted = bool(payload.get("accepted_terms"))
+    if not full_name or not email or not password or not accepted:
+        return jsonify(error="name, email, password, and accepted terms are required"), 400
+
+    otp_code = generate_otp()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    password_hash = hash_password(password)
+
+    conn = db_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM app_users WHERE email = %s", (email,))
+                existing = cur.fetchone()
+                if existing:
+                    return jsonify(error="An account with this email already exists"), 409
+
+                cur.execute(
+                    """
+                    INSERT INTO app_users (email, full_name, email_verified, status)
+                    VALUES (%s, %s, FALSE, 'PENDING')
+                    RETURNING id
+                    """,
+                    (email, full_name),
+                )
+                user_id = cur.fetchone()[0]
+                cur.execute(
+                    """
+                    INSERT INTO auth_identities (app_user_id, provider, provider_user_id, provider_email, password_hash)
+                    VALUES (%s, 'LOCAL_PASSWORD', %s, %s, %s)
+                    """,
+                    (user_id, email, email, password_hash),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO email_otp_codes (email, otp_code, purpose, expires_at)
+                    VALUES (%s, %s, 'EMAIL_VERIFY', %s)
+                    """,
+                    (email, otp_code, expires_at),
+                )
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    session["pending_signup"] = {"email": email}
+    return jsonify(
+        ok=True,
+        message="OTP generated",
+        demo_otp=otp_code,
+        email=email,
+    )
+
+
+@app.post("/api/auth/verify-email")
+def api_verify_email():
+    payload = request.get_json(force=True)
+    email = payload.get("email", "").strip().lower()
+    otp_code = payload.get("otp_code", "").strip()
+    if not email or not otp_code:
+        return jsonify(error="email and otp_code are required"), 400
+
+    otp_row = fetch_one(
+        """
+        SELECT id, used_at, expires_at, attempt_count, max_attempts
+        FROM email_otp_codes
+        WHERE email = %s AND purpose = 'EMAIL_VERIFY' AND otp_code = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (email, otp_code),
+    )
+    if not otp_row:
+        return jsonify(error="Invalid OTP"), 400
+    if otp_row[1] is not None:
+        return jsonify(error="OTP already used"), 400
+    if otp_row[2] < datetime.now(timezone.utc):
+        return jsonify(error="OTP expired"), 400
+    if otp_row[3] >= otp_row[4]:
+        return jsonify(error="Too many OTP attempts"), 400
+
+    execute("UPDATE email_otp_codes SET used_at = CURRENT_TIMESTAMP WHERE id = %s", (otp_row[0],))
+    execute("UPDATE app_users SET email_verified = TRUE, status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP WHERE email = %s", (email,))
+    user = fetch_one(
+        "SELECT id, email, full_name, avatar_url, email_verified, status, last_login_at FROM app_users WHERE email = %s",
+        (email,),
+    )
+    execute(
+        "UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+        (user[0],),
+    )
+    set_session_user(serialize_user(user))
+    return jsonify(ok=True, user=serialize_user(user))
+
+
+@app.post("/api/auth/login")
+def api_login():
+    payload = request.get_json(force=True)
+    email = payload.get("email", "").strip().lower()
+    password = payload.get("password", "")
+    if not email or not password:
+        return jsonify(error="email and password are required"), 400
+
+    user_row = fetch_one(
+        "SELECT id, email, full_name, avatar_url, email_verified, status, last_login_at FROM app_users WHERE email = %s",
+        (email,),
+    )
+    if not user_row:
+        return jsonify(error="Invalid credentials"), 400
+    identity = fetch_one(
+        "SELECT password_hash FROM auth_identities WHERE app_user_id = %s AND provider = 'LOCAL_PASSWORD'",
+        (user_row[0],),
+    )
+    if not identity or not verify_password(password, identity[0]):
+        return jsonify(error="Invalid credentials"), 400
+    execute("UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (user_row[0],))
+    user_row = fetch_one(
+        "SELECT id, email, full_name, avatar_url, email_verified, status, last_login_at FROM app_users WHERE id = %s",
+        (user_row[0],),
+    )
+    set_session_user(serialize_user(user_row))
+    return jsonify(ok=True, user=serialize_user(user_row))
 
 
 if __name__ == "__main__":

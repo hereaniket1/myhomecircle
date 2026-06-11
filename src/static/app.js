@@ -4,6 +4,7 @@ const screen = document.getElementById("screen");
 const navButtons = Array.from(document.querySelectorAll("[data-view]"));
 const menuBtn = document.querySelector("[data-action='toggle-nav']");
 const appShell = document.querySelector(".app-shell");
+const loginModal = document.getElementById("loginModal");
 
 const protectedViews = new Set(["vendors", "vendor_detail", "quotes", "groups", "group_detail", "leaderboard", "profile"]);
 
@@ -60,7 +61,7 @@ function renderAuthGate(view) {
         <div class="kicker">Protected Area</div>
         <h1>Google login required</h1>
         <p>${view} is available after sign in. Home stays public so people can preview the app first.</p>
-        <a class="primary-big primary-big--inline" href="/login/google?next=${encodeURIComponent(location.pathname || "/")}">Continue with Google</a>
+        <button class="primary-big primary-big--inline" type="button" data-action="open-login">Continue with Google</button>
       </div>
     </section>
   `;
@@ -68,14 +69,34 @@ function renderAuthGate(view) {
 
 function renderHome() {
   const data = sections.home;
+  const user = appState.currentUser;
+  const title = isAuthed() && user ? `Welcome ${user.full_name || user.email}` : "Welcome to MyHomeCircle";
+  const heroText = isAuthed()
+    ? "You are signed in. Explore vendors, compare quotes, and join community buys."
+    : "Discover trusted vendors, compare real prices, and explore community group buys.";
   screen.innerHTML = `
     <section class="dashboard">
-      <div class="hero-row">
-        <div><h1>${data.title}</h1></div>
-        <div class="badge-pill">${data.badge}</div>
-      </div>
-      <p class="hero-banner">${data.hero}</p>
-      <div class="stats-grid">
+      <section class="hero-card">
+        <div class="hero-copy">
+          <div class="kicker">${isAuthed() ? "Signed in" : "Guest preview"}</div>
+          <h1>${title}</h1>
+          <p>${heroText}</p>
+          <div class="hero-actions">
+            <button class="primary-big primary-big--inline" type="button" data-go="vendors">Explore Vendors</button>
+            ${isAuthed() ? `<button class="secondary-big secondary-big--inline" type="button" data-go="profile">Open Profile</button>` : `<button class="secondary-big secondary-big--inline" type="button" data-action="open-login">Sign in</button>`}
+          </div>
+        </div>
+        <div class="hero-panel">
+          <div class="hero-panel__badge">${isAuthed() ? "Welcome User" : "Public Access"}</div>
+          <ul class="hero-list">
+            <li><strong>Trusted vendors</strong><span>Compare communities and service providers</span></li>
+            <li><strong>Quote tracking</strong><span>See grouped prices and offers</span></li>
+            <li><strong>Member access</strong><span>Unlock profile after login</span></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="stats-grid">
         ${data.stats
           .map(
             (item) => `
@@ -85,29 +106,32 @@ function renderHome() {
               </article>`,
           )
           .join("")}
-      </div>
-      <div class="section-head">
-        <h2>Top Vendors</h2>
-        <button class="link-btn" data-go="vendors">View all</button>
-      </div>
-      <div class="vendor-list">
-        ${data.vendors
-          .map(
-            (vendor) => `
-              <article class="vendor-card">
-                <div class="vendor-icon">⌂</div>
-                <div class="vendor-info">
-                  <div class="vendor-name">${vendor.name}</div>
-                  <div class="vendor-category">${vendor.category}</div>
-                </div>
-                <div class="vendor-meta">
-                  <div class="vendor-rating">${vendor.rating} ★</div>
-                  <div class="vendor-uses">${vendor.uses}</div>
-                </div>
-              </article>`,
-          )
-          .join("")}
-      </div>
+      </section>
+
+      <section class="home-section">
+        <div class="section-head">
+          <h2>Featured vendors</h2>
+          <button class="link-btn" data-go="vendors">View all</button>
+        </div>
+        <div class="vendor-list">
+          ${data.vendors
+            .map(
+              (vendor) => `
+                <article class="vendor-card">
+                  <div class="vendor-icon">⌂</div>
+                  <div class="vendor-info">
+                    <div class="vendor-name">${vendor.name}</div>
+                    <div class="vendor-category">${vendor.category}</div>
+                  </div>
+                  <div class="vendor-meta">
+                    <div class="vendor-rating">${vendor.rating} ★</div>
+                    <div class="vendor-uses">${vendor.uses}</div>
+                  </div>
+                </article>`,
+            )
+            .join("")}
+        </div>
+      </section>
     </section>
   `;
 }
@@ -391,6 +415,101 @@ menuBtn?.addEventListener("click", () => {
   appShell.classList.toggle("nav-open");
 });
 
+function openLoginModal() {
+  loginModal?.removeAttribute("hidden");
+}
+
+function closeLoginModal() {
+  loginModal?.setAttribute("hidden", "");
+}
+
+function setAuthPanel(panelName) {
+  document.querySelectorAll("[data-auth-panel]").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.dataset.authPanel !== panelName);
+  });
+  document.querySelectorAll("[data-auth-tab]").forEach((tab) => {
+    tab.classList.toggle("is-active", tab.dataset.authTab === panelName);
+  });
+}
+
+document.addEventListener("click", (event) => {
+  const action = event.target.closest("[data-action]")?.dataset.action;
+  if (action === "open-login") openLoginModal();
+  if (action === "close-login") closeLoginModal();
+  if (action === "google-login") {
+    const nextUrl = location.pathname || "/";
+    const url = `/auth/google/login?popup=true&next=${encodeURIComponent(nextUrl)}`;
+    const popup = window.open(url, "myhomecircle_google_login", "width=520,height=680");
+    if (!popup) window.location.href = url.replace("popup=true&", "");
+  }
+  if (action === "verify-otp") {
+    const form = document.querySelector(".auth-panel[data-auth-panel='signup']");
+    const email = form?.querySelector("input[name='email']")?.value?.trim();
+    const otp_code = form?.querySelector("input[name='otp_code']")?.value?.trim();
+    if (!email || !otp_code) return;
+    fetch("/api/auth/verify-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, otp_code }),
+    })
+      .then((response) => response.json().then((json) => ({ ok: response.ok, json })))
+      .then(({ ok, json }) => {
+        if (!ok) throw new Error(json.error || "OTP verification failed");
+        window.location.reload();
+      })
+      .catch((error) => alert(error.message));
+  }
+});
+
+document.addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-auth-tab]");
+  if (!tab) return;
+  setAuthPanel(tab.dataset.authTab);
+});
+
+document.addEventListener("submit", async (event) => {
+  const form = event.target.closest(".auth-panel");
+  if (!form) return;
+  const action = event.submitter?.getAttribute("formaction");
+  if (!action) return;
+  event.preventDefault();
+  const formData = new FormData(form);
+  const payload = Object.fromEntries(formData.entries());
+  payload.accepted_terms = formData.get("accepted_terms") === "on";
+  const response = await fetch(action, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    alert(result.error || "Unable to complete auth step");
+    return;
+  }
+  if (result.demo_otp) {
+    alert(`Development OTP: ${result.demo_otp}`);
+    setAuthPanel("signup");
+    return;
+  }
+  window.location.reload();
+});
+
+window.addEventListener("message", async (event) => {
+  if (event.data?.type !== "oauth_success") return;
+  const response = await fetch("/auth/me");
+  const result = await response.json().catch(() => ({}));
+  if (result.authenticated) {
+    appState.authed = true;
+    appState.currentUser = result.user;
+    renderView(initial);
+    setActive(initial === "" ? "home" : initial);
+    closeLoginModal();
+  } else {
+    window.location.reload();
+  }
+});
+
 const initial = location.pathname.replace(/^\/+/, "") || "home";
 renderView(initial);
 setActive(initial === "" ? "home" : initial);
+if (appState.authMode) setAuthPanel(appState.authMode);

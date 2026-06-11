@@ -15,10 +15,10 @@
         </div>
         <div class="top-actions">
           {% if current_user %}
-            <div class="user-chip">{{ current_user.name }}</div>
+            <div class="user-chip">{{ current_user.full_name or current_user.email }}</div>
             <a class="top-link" href="{{ url_for('logout') }}">Logout</a>
           {% else %}
-            <a class="top-link" href="{{ url_for('login_google', next=request.path if request else '/') }}">Google Login</a>
+            <button class="top-link" type="button" data-action="open-login">Signup/Login</button>
           {% endif %}
           <button class="menu-btn" type="button" data-action="toggle-nav">Menu</button>
         </div>
@@ -35,12 +35,74 @@
       </nav>
     </div>
 
+    <div class="login-modal" id="loginModal" hidden>
+      <div class="login-modal__backdrop" data-action="close-login"></div>
+      <div class="login-modal__panel" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+        <div class="auth-tabs">
+          <button class="auth-tab is-active" type="button" data-auth-tab="google">Google</button>
+          <button class="auth-tab" type="button" data-auth-tab="login">Login</button>
+          <button class="auth-tab" type="button" data-auth-tab="signup">Sign Up</button>
+        </div>
+
+        <div class="auth-panel" data-auth-panel="google">
+          <div class="kicker">Signup/Login</div>
+          <h2 id="loginTitle">Continue with Google</h2>
+          <p>Use a Google account to create or open your profile. This dev flow simulates the callback and stores the user.</p>
+          <button class="primary-big" type="button" data-action="google-login">Continue with Google</button>
+          <button class="secondary-big" type="button" data-action="close-login">Cancel</button>
+        </div>
+
+        <form class="auth-panel hidden" data-auth-panel="login">
+          <div class="kicker">Login</div>
+          <h2>Use email and password</h2>
+          <label class="auth-field">
+            <span>Email</span>
+            <input type="email" name="email" autocomplete="email" />
+          </label>
+          <label class="auth-field">
+            <span>Password</span>
+            <input type="password" name="password" autocomplete="current-password" />
+          </label>
+          <button class="primary-big" type="submit" formaction="/api/auth/login" formmethod="post">Login</button>
+        </form>
+
+        <form class="auth-panel hidden" data-auth-panel="signup">
+          <div class="kicker">Create account</div>
+          <h2>Sign up and verify email</h2>
+          <label class="auth-field">
+            <span>Name</span>
+            <input type="text" name="full_name" autocomplete="name" />
+          </label>
+          <label class="auth-field">
+            <span>Email</span>
+            <input type="email" name="email" autocomplete="email" />
+          </label>
+          <label class="auth-field">
+            <span>Password</span>
+            <input type="password" name="password" autocomplete="new-password" />
+          </label>
+          <label class="auth-check">
+            <input type="checkbox" name="accepted_terms" />
+            <span>I agree to the signup contract</span>
+          </label>
+          <button class="primary-big" type="submit" formaction="/api/auth/signup" formmethod="post">Generate OTP</button>
+          <label class="auth-field">
+            <span>OTP</span>
+            <input type="text" name="otp_code" inputmode="numeric" maxlength="6" />
+          </label>
+          <button class="secondary-big" type="button" data-action="verify-otp">Verify OTP</button>
+        </form>
+      </div>
+    </div>
+
     <script>
       window.__SPA_SECTIONS__ = {{ spa_sections | tojson }};
       window.__APP_STATE__ = {
         authed: {{ 'true' if current_user else 'false' }},
         currentUser: {{ current_user | tojson }},
         loginEnabled: {{ 'true' if login_enabled else 'false' }},
+        authMode: {{ auth_mode | default(None) | tojson }},
+        authPrompt: {{ auth_prompt | default(false) | tojson }},
       };
     </script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>

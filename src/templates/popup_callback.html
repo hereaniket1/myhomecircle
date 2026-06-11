@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Signing In...</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <div class="popup-callback">
+    <div class="popup-callback__spinner"></div>
+    <p>Signing you in...</p>
+  </div>
+  <script src="{{ url_for('static', filename='popup_callback.js') }}"></script>
+</body>
+</html>
