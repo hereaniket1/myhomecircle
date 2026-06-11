@@ -9,6 +9,7 @@ from functools import wraps
 import psycopg2
 from flask import Flask, jsonify, render_template, request, redirect, session, url_for
 from authlib.integrations.flask_client import OAuth
+import resend
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.getenv("SECRET_KEY", "dev-only-change-me")
@@ -307,6 +308,31 @@ def generate_otp():
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
+def send_email_otp(email: str, full_name: str, otp_code: str):
+    resend.api_key = os.environ["RESEND_API_KEY"]
+    from_email = os.getenv("RESEND_FROM_EMAIL", "MyHomeCircle <no-reply@myhomecircle.app>")
+    params = {
+        "from": from_email,
+        "to": [email],
+        "subject": "Your MyHomeCircle verification code",
+        "html": f"""
+            <div style="font-family: Arial, sans-serif; color: #1c2430;">
+              <h2 style="margin: 0 0 12px;">Hi {full_name},</h2>
+              <p style="margin: 0 0 12px;">Your email verification code for MyHomeCircle is:</p>
+              <div style="font-size: 28px; font-weight: 700; letter-spacing: 4px; margin: 16px 0; padding: 16px 20px; background: #f4f7f5; border-radius: 12px; display: inline-block;">
+                {otp_code}
+              </div>
+              <p style="margin: 12px 0 0;">This code expires in 10 minutes.</p>
+            </div>
+        """,
+    }
+    return resend.Emails.send(params)
+
+
+def render_auth_error(message: str, status: int = 400):
+    return jsonify(error=message), status
+
+
 def upsert_google_user(user_info):
     email = (user_info.get("email") or "").strip().lower()
     full_name = (user_info.get("name") or "Google User").strip()
@@ -427,8 +453,6 @@ def api_signup():
     if not full_name or not email or not password or not accepted:
         return jsonify(error="name, email, password, and accepted terms are required"), 400
 
-    otp_code = generate_otp()
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
     password_hash = hash_password(password)
 
     conn = db_conn()
@@ -456,6 +480,8 @@ def api_signup():
                     """,
                     (user_id, email, email, password_hash),
                 )
+                otp_code = generate_otp()
+                expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
                 cur.execute(
                     """
                     INSERT INTO email_otp_codes (email, otp_code, purpose, expires_at)
@@ -463,6 +489,7 @@ def api_signup():
                     """,
                     (email, otp_code, expires_at),
                 )
+        send_email_otp(email=email, full_name=full_name, otp_code=otp_code)
     except Exception:
         conn.rollback()
         raise
@@ -476,6 +503,45 @@ def api_signup():
         demo_otp=otp_code,
         email=email,
     )
+
+
+@app.post("/api/auth/resend-otp")
+def api_resend_otp():
+    payload = request.get_json(force=True)
+    email = payload.get("email", "").strip().lower()
+    if not email:
+        return render_auth_error("email is required")
+
+    conn = db_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, full_name, email_verified FROM app_users WHERE email = %s",
+                    (email,),
+                )
+                user = cur.fetchone()
+                if not user:
+                    return render_auth_error("No signup found for this email", 404)
+                if user[2]:
+                    return render_auth_error("This email is already verified")
+
+                otp_code = generate_otp()
+                expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+                cur.execute(
+                    """
+                    INSERT INTO email_otp_codes (email, otp_code, purpose, expires_at)
+                    VALUES (%s, %s, 'EMAIL_VERIFY', %s)
+                    """,
+                    (email, otp_code, expires_at),
+                )
+        send_email_otp(email=email, full_name=user[1] or "there", otp_code=otp_code)
+        return jsonify(ok=True, message="OTP resent")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @app.post("/api/auth/verify-email")
@@ -505,18 +571,26 @@ def api_verify_email():
     if otp_row[3] >= otp_row[4]:
         return jsonify(error="Too many OTP attempts"), 400
 
-    execute("UPDATE email_otp_codes SET used_at = CURRENT_TIMESTAMP WHERE id = %s", (otp_row[0],))
-    execute("UPDATE app_users SET email_verified = TRUE, status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP WHERE email = %s", (email,))
-    user = fetch_one(
-        "SELECT id, email, full_name, avatar_url, email_verified, status, last_login_at FROM app_users WHERE email = %s",
-        (email,),
-    )
-    execute(
-        "UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
-        (user[0],),
-    )
-    set_session_user(serialize_user(user))
-    return jsonify(ok=True, user=serialize_user(user))
+    conn = db_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE email_otp_codes SET used_at = CURRENT_TIMESTAMP WHERE id = %s", (otp_row[0],))
+                cur.execute("UPDATE app_users SET email_verified = TRUE, status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP WHERE email = %s", (email,))
+                cur.execute("UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE email = %s", (email,))
+                cur.execute(
+                    "SELECT id, email, full_name, avatar_url, email_verified, status, last_login_at FROM app_users WHERE email = %s",
+                    (email,),
+                )
+                user = cur.fetchone()
+        user_data = serialize_user(user)
+        set_session_user(user_data)
+        return jsonify(ok=True, user=user_data)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @app.post("/api/auth/login")
@@ -538,14 +612,25 @@ def api_login():
         (user_row[0],),
     )
     if not identity or not verify_password(password, identity[0]):
-        return jsonify(error="Invalid credentials"), 400
-    execute("UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (user_row[0],))
-    user_row = fetch_one(
-        "SELECT id, email, full_name, avatar_url, email_verified, status, last_login_at FROM app_users WHERE id = %s",
-        (user_row[0],),
-    )
-    set_session_user(serialize_user(user_row))
-    return jsonify(ok=True, user=serialize_user(user_row))
+        return render_auth_error("Invalid credentials")
+    conn = db_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE app_users SET last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (user_row[0],))
+                cur.execute(
+                    "SELECT id, email, full_name, avatar_url, email_verified, status, last_login_at FROM app_users WHERE id = %s",
+                    (user_row[0],),
+                )
+                user_row = cur.fetchone()
+        user_data = serialize_user(user_row)
+        set_session_user(user_data)
+        return jsonify(ok=True, user=user_data)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

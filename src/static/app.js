@@ -5,6 +5,9 @@ const navButtons = Array.from(document.querySelectorAll("[data-view]"));
 const menuBtn = document.querySelector("[data-action='toggle-nav']");
 const appShell = document.querySelector(".app-shell");
 const loginModal = document.getElementById("loginModal");
+const authError = document.getElementById("authError");
+let otpCountdownTimer = null;
+let otpCountdownRemaining = 20;
 
 const protectedViews = new Set(["vendors", "vendor_detail", "quotes", "groups", "group_detail", "leaderboard", "profile"]);
 
@@ -43,6 +46,17 @@ function setActive(view) {
   navButtons.forEach((btn) => btn.classList.toggle("is-active", btn.dataset.view === view));
 }
 
+function setAuthError(message = "") {
+  if (!authError) return;
+  if (!message) {
+    authError.textContent = "";
+    authError.classList.add("hidden");
+    return;
+  }
+  authError.textContent = message;
+  authError.classList.remove("hidden");
+}
+
 function viewToPath(view) {
   if (view === "home") return "/";
   if (view === "group_detail") return "/group-detail";
@@ -70,29 +84,20 @@ function renderAuthGate(view) {
 function renderHome() {
   const data = sections.home;
   const user = appState.currentUser;
-  const title = isAuthed() && user ? `Welcome ${user.full_name || user.email}` : "Welcome to MyHomeCircle";
-  const heroText = isAuthed()
-    ? "You are signed in. Explore vendors, compare quotes, and join community buys."
-    : "Discover trusted vendors, compare real prices, and explore community group buys.";
+  const title = isAuthed() && user ? "Welcome User" : "Welcome to HomeCircle";
   screen.innerHTML = `
     <section class="dashboard">
       <section class="hero-card">
         <div class="hero-copy">
-          <div class="kicker">${isAuthed() ? "Signed in" : "Guest preview"}</div>
+          <div class="kicker">HomeCircle</div>
           <h1>${title}</h1>
-          <p>${heroText}</p>
-          <div class="hero-actions">
-            <button class="primary-big primary-big--inline" type="button" data-go="vendors">Explore Vendors</button>
-            ${isAuthed() ? `<button class="secondary-big secondary-big--inline" type="button" data-go="profile">Open Profile</button>` : `<button class="secondary-big secondary-big--inline" type="button" data-action="open-login">Sign in</button>`}
-          </div>
+          <p>${isAuthed() ? "You are signed in." : "Find trusted services in your community."}</p>
+          ${isAuthed() ? `<button class="secondary-big secondary-big--inline" type="button" data-go="profile">Open Profile</button>` : ""}
         </div>
         <div class="hero-panel">
-          <div class="hero-panel__badge">${isAuthed() ? "Welcome User" : "Public Access"}</div>
-          <ul class="hero-list">
-            <li><strong>Trusted vendors</strong><span>Compare communities and service providers</span></li>
-            <li><strong>Quote tracking</strong><span>See grouped prices and offers</span></li>
-            <li><strong>Member access</strong><span>Unlock profile after login</span></li>
-          </ul>
+          <div class="hero-blob hero-blob--yellow"></div>
+          <div class="hero-blob hero-blob--purple"></div>
+          <div class="hero-badge">HC</div>
         </div>
       </section>
 
@@ -416,6 +421,7 @@ menuBtn?.addEventListener("click", () => {
 });
 
 function openLoginModal() {
+  setAuthError("");
   loginModal?.removeAttribute("hidden");
 }
 
@@ -430,6 +436,63 @@ function setAuthPanel(panelName) {
   document.querySelectorAll("[data-auth-tab]").forEach((tab) => {
     tab.classList.toggle("is-active", tab.dataset.authTab === panelName);
   });
+}
+
+function showSignupOtpStep() {
+  setAuthError("");
+  document.querySelector('[data-signup-step="details"]')?.classList.add("hidden");
+  document.querySelector('[data-signup-step="otp"]')?.classList.remove("hidden");
+}
+
+function showSignupDetailsStep() {
+  setAuthError("");
+  document.querySelector('[data-signup-step="otp"]')?.classList.add("hidden");
+  document.querySelector('[data-signup-step="details"]')?.classList.remove("hidden");
+}
+
+function setOtpCountdown(seconds) {
+  clearInterval(otpCountdownTimer);
+  otpCountdownRemaining = seconds;
+  const countdownEl = document.querySelector("[data-otp-countdown]");
+  const resendBtn = document.querySelector("[data-action='resend-otp']");
+  if (resendBtn) resendBtn.disabled = true;
+  if (countdownEl) countdownEl.textContent = `${otpCountdownRemaining}s`;
+  otpCountdownTimer = window.setInterval(() => {
+    otpCountdownRemaining -= 1;
+    if (countdownEl) countdownEl.textContent = `${Math.max(otpCountdownRemaining, 0)}s`;
+    if (otpCountdownRemaining <= 0) {
+      clearInterval(otpCountdownTimer);
+      if (resendBtn) resendBtn.disabled = false;
+      if (countdownEl) countdownEl.textContent = "";
+    }
+  }, 1000);
+}
+
+function notifyOpenerAndCloseSelf() {
+  if (window.opener && !window.opener.closed) {
+    window.opener.postMessage({ type: "oauth_success" }, window.location.origin);
+    window.close();
+  }
+}
+
+function handleAuthSuccess(user) {
+  appState.authed = true;
+  appState.currentUser = user;
+  renderView("home");
+  setActive("home");
+  setAuthError("");
+  closeLoginModal();
+  notifyOpenerAndCloseSelf();
+}
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await response.json().catch(() => ({}));
+  return { response, json };
 }
 
 document.addEventListener("click", (event) => {
@@ -447,17 +510,27 @@ document.addEventListener("click", (event) => {
     const email = form?.querySelector("input[name='email']")?.value?.trim();
     const otp_code = form?.querySelector("input[name='otp_code']")?.value?.trim();
     if (!email || !otp_code) return;
-    fetch("/api/auth/verify-email", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, otp_code }),
-    })
-      .then((response) => response.json().then((json) => ({ ok: response.ok, json })))
-      .then(({ ok, json }) => {
-        if (!ok) throw new Error(json.error || "OTP verification failed");
-        window.location.reload();
+    postJson("/api/auth/verify-email", { email, otp_code })
+      .then(({ response, json }) => {
+        if (!response.ok) throw new Error(json.error || "OTP verification failed");
+        handleAuthSuccess(json.user);
       })
-      .catch((error) => alert(error.message));
+      .catch((error) => setAuthError(error.message));
+  }
+  if (action === "resend-otp") {
+    const form = document.querySelector(".auth-panel[data-auth-panel='signup']");
+    const email = form?.querySelector("input[name='email']")?.value?.trim();
+    if (!email) return setAuthError("Please enter your email first.");
+    postJson("/api/auth/resend-otp", { email })
+      .then(({ response, json }) => {
+        if (!response.ok) throw new Error(json.error || "Unable to resend OTP");
+        showSignupOtpStep();
+        setOtpCountdown(20);
+      })
+      .catch((error) => setAuthError(error.message));
+  }
+  if (action === "signup-back") {
+    showSignupDetailsStep();
   }
 });
 
@@ -483,15 +556,14 @@ document.addEventListener("submit", async (event) => {
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
-    alert(result.error || "Unable to complete auth step");
+    setAuthError(result.error || "Unable to complete auth step");
     return;
   }
   if (result.demo_otp) {
-    alert(`Development OTP: ${result.demo_otp}`);
-    setAuthPanel("signup");
+    showSignupOtpStep();
+    setOtpCountdown(20);
     return;
   }
-  window.location.reload();
 });
 
 window.addEventListener("message", async (event) => {
@@ -499,11 +571,7 @@ window.addEventListener("message", async (event) => {
   const response = await fetch("/auth/me");
   const result = await response.json().catch(() => ({}));
   if (result.authenticated) {
-    appState.authed = true;
-    appState.currentUser = result.user;
-    renderView(initial);
-    setActive(initial === "" ? "home" : initial);
-    closeLoginModal();
+    handleAuthSuccess(result.user);
   } else {
     window.location.reload();
   }

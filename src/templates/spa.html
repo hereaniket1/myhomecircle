@@ -38,6 +38,7 @@
     <div class="login-modal" id="loginModal" hidden>
       <div class="login-modal__backdrop" data-action="close-login"></div>
       <div class="login-modal__panel" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+        <div id="authError" class="auth-error hidden" role="status" aria-live="polite"></div>
         <div class="auth-tabs">
           <button class="auth-tab is-active" type="button" data-auth-tab="google">Google</button>
           <button class="auth-tab" type="button" data-auth-tab="login">Login</button>
@@ -45,16 +46,26 @@
         </div>
 
         <div class="auth-panel" data-auth-panel="google">
-          <div class="kicker">Signup/Login</div>
-          <h2 id="loginTitle">Continue with Google</h2>
-          <p>Use a Google account to create or open your profile. This dev flow simulates the callback and stores the user.</p>
+          <div class="auth-brand-card">
+            <div class="auth-brand-mark">HC</div>
+            <div>
+              <h2 id="loginTitle">Welcome to HomeCircle</h2>
+              <p>Signup or login with Google, or use email and password.</p>
+            </div>
+          </div>
+          <div class="auth-illustration auth-illustration--google" aria-hidden="true"></div>
           <button class="primary-big" type="button" data-action="google-login">Continue with Google</button>
           <button class="secondary-big" type="button" data-action="close-login">Cancel</button>
         </div>
 
         <form class="auth-panel hidden" data-auth-panel="login">
-          <div class="kicker">Login</div>
-          <h2>Use email and password</h2>
+          <div class="auth-brand-card">
+            <div class="auth-brand-mark">HC</div>
+            <div>
+              <h2>Welcome to HomeCircle</h2>
+              <p>Login with email and password.</p>
+            </div>
+          </div>
           <label class="auth-field">
             <span>Email</span>
             <input type="email" name="email" autocomplete="email" />
@@ -67,8 +78,13 @@
         </form>
 
         <form class="auth-panel hidden" data-auth-panel="signup">
-          <div class="kicker">Create account</div>
-          <h2>Sign up and verify email</h2>
+          <div class="auth-brand-card">
+            <div class="auth-brand-mark">HC</div>
+            <div>
+              <h2>Create your account</h2>
+              <p>Sign up and verify your email with a one-time code.</p>
+            </div>
+          </div>
           <label class="auth-field">
             <span>Name</span>
             <input type="text" name="full_name" autocomplete="name" />
@@ -85,12 +101,20 @@
             <input type="checkbox" name="accepted_terms" />
             <span>I agree to the signup contract</span>
           </label>
-          <button class="primary-big" type="submit" formaction="/api/auth/signup" formmethod="post">Generate OTP</button>
-          <label class="auth-field">
-            <span>OTP</span>
-            <input type="text" name="otp_code" inputmode="numeric" maxlength="6" />
-          </label>
-          <button class="secondary-big" type="button" data-action="verify-otp">Verify OTP</button>
+          <div class="signup-step" data-signup-step="details">
+            <button class="primary-big" type="submit" formaction="/api/auth/signup" formmethod="post">Generate OTP</button>
+          </div>
+          <div class="signup-step hidden" data-signup-step="otp">
+            <label class="auth-field">
+              <span>Enter OTP</span>
+              <input type="text" name="otp_code" inputmode="numeric" maxlength="6" />
+            </label>
+            <div class="otp-actions">
+              <button class="primary-big" type="button" data-action="verify-otp">Verify OTP</button>
+              <button class="secondary-big" type="button" data-action="resend-otp" disabled>Resend OTP <span data-otp-countdown>20s</span></button>
+            </div>
+            <button class="auth-back-btn" type="button" data-action="signup-back">Re-enter signup details</button>
+          </div>
         </form>
       </div>
     </div>
