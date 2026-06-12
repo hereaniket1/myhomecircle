@@ -30,6 +30,7 @@ const contributors = [
   { name: "Villa 112", points: "980 pts", badge: "Silver Badge" },
   { name: "Villa 215", points: "820 pts", badge: "Silver Badge" },
 ];
+let communitySearchTimer = null;
 
 const sampleVendorDetails = {
   name: "SolarBright Energy",
@@ -129,8 +130,10 @@ function renderAuthGate(view) {
 function renderHome() {
   const data = sections.home;
   const user = appState.currentUser;
-  const title = isAuthed() && user ? "Welcome User" : "Welcome to HomeCircle";
   const userName = user?.full_name || user?.name || user?.email || "User";
+  const firstNameSource = userName.includes("@") ? userName.split("@")[0] : userName;
+  const firstName = firstNameSource.trim().split(/\s+/)[0] || "User";
+  const title = isAuthed() && user ? `Welcome ${escapeHtml(firstName)}` : "Welcome to HomeCircle";
   const userInitial = userName.trim().charAt(0).toUpperCase() || "U";
   const safeUserName = escapeHtml(userName);
   const authAction = isAuthed()
@@ -293,6 +296,152 @@ function renderHome() {
       </section>
     </section>
   `;
+}
+
+function communityAddressLine(address = {}) {
+  return [
+    address.address_line_1,
+    address.address_line_2,
+    address.locality,
+    address.city,
+    address.state,
+    address.postal_code,
+    address.country,
+  ].filter(Boolean).join(", ");
+}
+
+function renderCommunityList(communities = []) {
+  const list = document.getElementById("communityList");
+  if (!list) return;
+  if (!communities.length) {
+    list.innerHTML = `
+      <div class="community-empty">
+        <strong>No communities found</strong>
+        <span>Try another search or register your community.</span>
+      </div>
+    `;
+    return;
+  }
+  list.innerHTML = communities.map((community) => {
+    const created = community.created_at ? new Date(community.created_at).toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }) : "Recently";
+    return `
+      <article class="community-card">
+        <div class="community-card__mark">${escapeHtml(community.name?.charAt(0) || "C")}</div>
+        <div>
+          <div class="community-card__top">
+            <h3>${escapeHtml(community.name || "Community")}</h3>
+            <span>${escapeHtml(community.status || "ACTIVE")}</span>
+          </div>
+          <p>${escapeHtml(communityAddressLine(community.address))}</p>
+          <small>Registered ${created}</small>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+function renderCommunityMatches(matches = []) {
+  const box = document.getElementById("communityMatches");
+  if (!box) return;
+  if (!matches.length) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  box.classList.remove("hidden");
+  box.innerHTML = `
+    <strong>Possible existing communities found</strong>
+    ${matches.map((match) => `
+      <div class="community-match">
+        <span>${escapeHtml(match.name)}</span>
+        <small>${escapeHtml(communityAddressLine(match.address))}</small>
+      </div>
+    `).join("")}
+  `;
+}
+
+async function loadCommunities(search = "") {
+  const list = document.getElementById("communityList");
+  if (list) list.innerHTML = `<div class="community-empty">Loading communities...</div>`;
+  try {
+    const response = await fetch(`/api/communities?q=${encodeURIComponent(search)}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Unable to load communities");
+    renderCommunityList(result.communities || []);
+  } catch (error) {
+    if (list) list.innerHTML = `<div class="community-error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function checkExistingCommunities(form) {
+  const formData = new FormData(form);
+  const payload = Object.fromEntries(formData.entries());
+  if (!payload.name && !payload.address_line_1 && !payload.city && !payload.postal_code) return;
+  try {
+    const { response, json } = await postJson("/api/communities/search-existing", payload);
+    if (!response.ok) throw new Error(json.error || "Unable to search existing communities");
+    renderCommunityMatches(json.matches || []);
+  } catch (error) {
+    renderCommunityMatches([]);
+  }
+}
+
+function renderCommunity() {
+  const registerAction = isAuthed()
+    ? `<button class="dashboard-auth-btn" type="button" data-action="toggle-community-form">Register my community</button>`
+    : "";
+  screen.innerHTML = `
+    <section class="community-page">
+      <header class="community-hero">
+        <div>
+          <div class="kicker">Communities</div>
+          <h1>Find your community</h1>
+          <p>View registered communities by newest registration date and search by name, address, city, state, or postal code.</p>
+        </div>
+        ${registerAction}
+      </header>
+
+      <div class="community-search">
+        <span>⌕</span>
+        <input id="communitySearch" type="search" placeholder="Search community name, address, city, state, postal code..." />
+      </div>
+
+      <section class="community-register hidden" id="communityRegister">
+        <div class="panel__head">
+          <h2>Register my community</h2>
+          <button class="link-btn" type="button" data-action="toggle-community-form">Close</button>
+        </div>
+        <form class="community-form" id="communityForm">
+          <label><span>Community name</span><input name="name" required placeholder="Avani Abode" /></label>
+          <label><span>Address line 1</span><input name="address_line_1" required placeholder="Street, block, society road" /></label>
+          <label><span>Address line 2</span><input name="address_line_2" placeholder="Optional landmark or phase" /></label>
+          <label><span>Locality</span><input name="locality" placeholder="Whitefield" /></label>
+          <label><span>City</span><input name="city" required placeholder="Bengaluru" /></label>
+          <label><span>State</span><input name="state" required placeholder="Karnataka" /></label>
+          <label><span>Postal code</span><input name="postal_code" required placeholder="560066" /></label>
+          <label><span>Country</span><input name="country" value="India" /></label>
+          <div id="communityMatches" class="community-matches hidden"></div>
+          <div class="community-form__actions">
+            <button class="primary-big primary-big--compact" type="submit">Register community</button>
+          </div>
+          <div id="communityFormMessage" class="community-form-message"></div>
+        </form>
+      </section>
+
+      <section class="community-results">
+        <div class="panel__head">
+          <h2>Registered communities</h2>
+          <span>Newest first</span>
+        </div>
+        <div id="communityList" class="community-list"></div>
+      </section>
+    </section>
+  `;
+  loadCommunities();
 }
 
 function renderVendors() {
@@ -543,6 +692,7 @@ function renderView(view) {
     return;
   }
   if (view === "home") renderHome();
+  else if (view === "community") renderCommunity();
   else if (view === "vendors") renderVendors();
   else if (view === "vendor_detail") renderVendorDetail();
   else if (view === "quotes") renderQuotes();
@@ -564,11 +714,54 @@ navButtons.forEach((btn) => {
 });
 
 screen.addEventListener("click", (event) => {
+  const action = event.target.closest("[data-action]")?.dataset.action;
+  if (action === "toggle-community-form") {
+    document.getElementById("communityRegister")?.classList.toggle("hidden");
+    return;
+  }
+
   const go = event.target.closest("[data-go]")?.dataset.go;
   if (!go) return;
   setActive(go);
   routeTo(viewToPath(go));
   renderView(go);
+});
+
+screen.addEventListener("input", (event) => {
+  if (event.target?.id === "communitySearch") {
+    clearTimeout(communitySearchTimer);
+    communitySearchTimer = window.setTimeout(() => loadCommunities(event.target.value.trim()), 250);
+  }
+});
+
+screen.addEventListener("submit", async (event) => {
+  const form = event.target.closest("#communityForm");
+  if (!form) return;
+  event.preventDefault();
+  const message = document.getElementById("communityFormMessage");
+  const formData = new FormData(form);
+  const payload = Object.fromEntries(formData.entries());
+  if (message) {
+    message.className = "community-form-message";
+    message.textContent = "Checking and registering community...";
+  }
+  const { response, json } = await postJson("/api/communities", payload);
+  if (!response.ok) {
+    renderCommunityMatches(json.matches || []);
+    if (message) {
+      message.classList.add("is-error");
+      message.textContent = json.error || "Unable to register community";
+    }
+    return;
+  }
+  if (message) {
+    message.classList.add("is-success");
+    message.textContent = "Community registered successfully.";
+  }
+  form.reset();
+  form.querySelector('input[name="country"]').value = "India";
+  renderCommunityMatches([]);
+  loadCommunities(document.getElementById("communitySearch")?.value?.trim() || "");
 });
 
 function openLoginModal() {

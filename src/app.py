@@ -10,6 +10,7 @@ import psycopg2
 from flask import Flask, jsonify, render_template, request, redirect, session, url_for
 from authlib.integrations.flask_client import OAuth
 import resend
+from community_service import find_existing_communities, list_communities, register_community
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.getenv("SECRET_KEY", "dev-only-change-me")
@@ -78,7 +79,7 @@ SPA_SECTIONS = {
 def create_connection():
     conn = psycopg2.connect(
         host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT") or os.getenv("DB_POST") or 5432,
+        port=os.getenv("DB_PORT") or os.getenv("DB_POST"),
         database=os.getenv("DB_ROYALTY_DATABASE_NAME"),
         user=os.getenv("DB_USER"),
         password=os.getenv("DB_PASSWORD")
@@ -286,6 +287,37 @@ def me():
 @app.get("/api/login-status")
 def login_status():
     return jsonify(authed=bool(current_user()), user=current_user())
+
+
+@app.get("/api/communities")
+def api_communities():
+    search = request.args.get("q", "")
+    communities = list_communities(db_conn, search=search)
+    return jsonify(ok=True, communities=communities)
+
+
+@app.post("/api/communities/search-existing")
+def api_communities_search_existing():
+    payload = request.get_json(force=True) or {}
+    matches = find_existing_communities(db_conn, payload)
+    return jsonify(ok=True, matches=matches)
+
+
+@app.post("/api/communities")
+def api_communities_register():
+    if not current_user():
+        return jsonify(error="Login is required to register a community"), 401
+    payload = request.get_json(force=True) or {}
+    try:
+        result = register_community(db_conn, payload)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    if not result.get("created"):
+        return jsonify(
+            error="A matching community may already exist",
+            matches=result.get("matches", []),
+        ), 409
+    return jsonify(ok=True, community=result["community"]), 201
 
 
 def hash_password(password: str) -> str:

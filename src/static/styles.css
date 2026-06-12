@@ -633,6 +633,206 @@ h1 {
   font-weight: 600;
 }
 
+.community-page {
+  max-width: 1580px;
+  margin: 0 auto;
+  display: grid;
+  gap: 18px;
+}
+
+.community-hero,
+.community-results,
+.community-register {
+  border: 1px solid var(--stroke);
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: var(--panel-shadow);
+}
+
+.community-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  padding: 28px;
+  background:
+    radial-gradient(circle at 92% 18%, rgba(54, 211, 124, 0.18), transparent 20%),
+    linear-gradient(90deg, #f2fbf5 0%, #ffffff 70%);
+}
+
+.community-hero h1 {
+  margin: 6px 0;
+  font-size: clamp(2.2rem, 3vw, 3.4rem);
+  line-height: 1;
+}
+
+.community-hero p {
+  max-width: 760px;
+  margin: 0;
+  color: var(--soft-text);
+}
+
+.community-search {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  border: 1px solid var(--stroke);
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: var(--panel-shadow);
+}
+
+.community-search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  font: inherit;
+}
+
+.community-register,
+.community-results {
+  padding: 22px;
+}
+
+.community-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.community-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--soft-text);
+  font-weight: 700;
+}
+
+.community-form input {
+  min-height: 48px;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  padding: 0 14px;
+  font: inherit;
+}
+
+.community-matches,
+.community-form__actions,
+.community-form-message {
+  grid-column: 1 / -1;
+}
+
+.community-matches {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #f0d58b;
+  border-radius: 14px;
+  background: #fff8e7;
+  color: #7a4f00;
+}
+
+.community-match {
+  display: grid;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(122, 79, 0, 0.16);
+}
+
+.community-match span {
+  font-weight: 800;
+}
+
+.community-match small {
+  color: #8a6a2f;
+}
+
+.community-form__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.community-form-message {
+  min-height: 24px;
+  font-weight: 800;
+}
+
+.community-form-message.is-error {
+  color: #b42318;
+}
+
+.community-form-message.is-success {
+  color: var(--green-dark);
+}
+
+.community-list {
+  display: grid;
+  gap: 12px;
+}
+
+.community-card {
+  display: grid;
+  grid-template-columns: 58px 1fr;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--stroke);
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.community-card__mark {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  background: var(--green-soft);
+  color: var(--green-dark);
+  font-weight: 900;
+  font-size: 1.4rem;
+}
+
+.community-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.community-card h3,
+.community-card p {
+  margin: 0;
+}
+
+.community-card__top span {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--green-soft);
+  color: var(--green-dark);
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+
+.community-card p,
+.community-card small,
+.community-empty {
+  color: var(--soft-text);
+}
+
+.community-empty,
+.community-error {
+  padding: 20px;
+  border: 1px dashed var(--stroke);
+  border-radius: 16px;
+  background: #fbfdfc;
+}
+
+.community-error {
+  color: #b42318;
+}
+
 .stat-card, .vendor-card, .req-card, .placeholder-card, .info-card, .group-card, .quote-card, .leader-card, .points-card, .selector, .menu-item, .gate-card {
   background: var(--card);
   border: 1px solid var(--line);
@@ -2005,5 +2205,29 @@ body {
 
   .vendor-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .community-hero {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 22px;
+  }
+
+  .community-form {
+    grid-template-columns: 1fr;
+  }
+
+  .community-form__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .community-card {
+    grid-template-columns: 48px 1fr;
+  }
+
+  .community-card__mark {
+    width: 48px;
+    height: 48px;
   }
 }
