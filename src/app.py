@@ -26,10 +26,14 @@ google = oauth.register(
 
 SPA_PAGES = [
     ("home", "Home"),
+    ("community", "Community"),
     ("vendors", "Vendors"),
-    ("groups", "Groups"),
     ("quotes", "Quotes"),
-    ("profile", "Profile"),
+    ("groups", "Group Buys"),
+    ("leaderboard", "Leaderboard"),
+    ("analytics", "Analytics"),
+    ("messages", "Messages"),
+    ("settings", "Settings"),
 ]
 
 SPA_SECTIONS = {

@@ -2,14 +2,34 @@ const sections = window.__SPA_SECTIONS__ || {};
 const appState = window.__APP_STATE__ || { authed: false };
 const screen = document.getElementById("screen");
 const navButtons = Array.from(document.querySelectorAll("[data-view]"));
-const menuBtn = document.querySelector("[data-action='toggle-nav']");
 const appShell = document.querySelector(".app-shell");
+const mobileMenu = document.getElementById("mobileMenu");
 const loginModal = document.getElementById("loginModal");
 const authError = document.getElementById("authError");
 let otpCountdownTimer = null;
 let otpCountdownRemaining = 20;
 
 const protectedViews = new Set(["vendors", "vendor_detail", "quotes", "groups", "group_detail", "leaderboard", "profile"]);
+const recentActivity = [
+  { title: "Villa 300 uploaded a Solar Installation quote", time: "2h ago", points: "+50 points", icon: "▣" },
+  { title: "Solar Group Buy reached 15 members", time: "3h ago", points: "", icon: "👥" },
+  { title: "Interior Vendor received a 5-star review", time: "5h ago", points: "+20 points", icon: "★" },
+  { title: "Water Softener Group Buy saved ₹3.2L for 12 members", time: "1d ago", points: "", icon: "💧" },
+];
+const groupBuys = [
+  { title: "Solar Installation", members: "18 members joined", goal: "Goal: 25 members", closing: "Closing in 5 days", width: "62%" },
+  { title: "Interior Package", members: "9 members joined", goal: "Goal: 15 members", closing: "Closing in 7 days", width: "54%" },
+  { title: "Water Purifier", members: "7 members joined", goal: "Goal: 12 members", closing: "Closing in 4 days", width: "48%" },
+];
+const bestDeals = [
+  { title: "Solar Installation", low: "₹2.05L", high: "₹2.62L", save: "₹57,000", img: "☀" },
+  { title: "Interior Package", low: "₹4.10L", high: "₹4.75L", save: "₹65,000", img: "⌂" },
+];
+const contributors = [
+  { name: "Villa 300", points: "1,250 pts", badge: "Gold Badge" },
+  { name: "Villa 112", points: "980 pts", badge: "Silver Badge" },
+  { name: "Villa 215", points: "820 pts", badge: "Silver Badge" },
+];
 
 const sampleVendorDetails = {
   name: "SolarBright Energy",
@@ -42,6 +62,15 @@ function isAuthed() {
   return Boolean(appState.authed);
 }
 
+function escapeHtml(value = "") {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function setActive(view) {
   navButtons.forEach((btn) => btn.classList.toggle("is-active", btn.dataset.view === view));
 }
@@ -68,6 +97,22 @@ function routeTo(path) {
   history.replaceState(null, "", path);
 }
 
+function setMobileMenu(open) {
+  if (!mobileMenu || !appShell) return;
+  appShell.classList.toggle("nav-open", open);
+  mobileMenu.classList.toggle("is-open", open);
+  document.body.classList.toggle("mobile-menu-open", open);
+  if (open) {
+    mobileMenu.removeAttribute("hidden");
+    return;
+  }
+  mobileMenu.setAttribute("hidden", "");
+}
+
+function toggleMobileMenu() {
+  setMobileMenu(!mobileMenu?.classList.contains("is-open"));
+}
+
 function renderAuthGate(view) {
   screen.innerHTML = `
     <section class="gate">
@@ -85,57 +130,166 @@ function renderHome() {
   const data = sections.home;
   const user = appState.currentUser;
   const title = isAuthed() && user ? "Welcome User" : "Welcome to HomeCircle";
+  const userName = user?.full_name || user?.name || user?.email || "User";
+  const userInitial = userName.trim().charAt(0).toUpperCase() || "U";
+  const safeUserName = escapeHtml(userName);
+  const authAction = isAuthed()
+    ? `
+      <button class="dashboard-notification" type="button" aria-label="Notifications">
+        <span>🔔</span>
+        <b>3</b>
+      </button>
+      <div class="dashboard-user-chip" title="${safeUserName}">
+        <span>${escapeHtml(userInitial)}</span>
+        <strong>${safeUserName}</strong>
+      </div>
+      <a class="dashboard-auth-btn dashboard-auth-btn--ghost" href="/logout">Logout</a>
+    `
+    : `<button class="dashboard-auth-btn" type="button" data-action="open-login">Signup/Login</button>`;
   screen.innerHTML = `
-    <section class="dashboard">
-      <section class="hero-card">
-        <div class="hero-copy">
-          <div class="kicker">HomeCircle</div>
-          <h1>${title}</h1>
-          <p>${isAuthed() ? "You are signed in." : "Find trusted services in your community."}</p>
-          ${isAuthed() ? `<button class="secondary-big secondary-big--inline" type="button" data-go="profile">Open Profile</button>` : ""}
+    <section class="dashboard-grid">
+      <header class="dashboard-hero">
+        <div>
+          <h1>${title} 👋</h1>
+          <p>${isAuthed() ? "Avani Abode • Villa 300" : "Browse the public HomeCircle dashboard"}</p>
         </div>
-        <div class="hero-panel">
-          <div class="hero-blob hero-blob--yellow"></div>
-          <div class="hero-blob hero-blob--purple"></div>
-          <div class="hero-badge">HC</div>
+        <div class="dashboard-hero__actions">
+          <div class="dashboard-hero__search">
+            <span>⌕</span>
+            <input type="text" value="" placeholder="Search vendors, quotes, group buys..." />
+          </div>
+          ${authAction}
         </div>
+      </header>
+
+      <section class="summary-card">
+        <div class="summary-card__main">
+          <div class="summary-card__kicker">Community Savings This Month</div>
+          <div class="summary-card__value">₹14.8L</div>
+          <div class="summary-card__sub">Saved through group buys</div>
+        </div>
+        <div class="summary-card__stats">
+          <article><strong>126</strong><span>Verified Quotes</span></article>
+          <article><strong>82</strong><span>Active Residents</span></article>
+          <article><strong>48</strong><span>Vendors</span></article>
+          <article><strong>1,250</strong><span>My Points</span></article>
+        </div>
+        <div class="summary-card__art"></div>
       </section>
 
-      <section class="stats-grid">
-        ${data.stats
-          .map(
-            (item) => `
-              <article class="stat-card">
-                <div class="stat-value">${item.value}</div>
-                <div class="stat-label">${item.label}</div>
-              </article>`,
-          )
-          .join("")}
+      <section class="quick-actions">
+        ${[
+          ["Upload Quote", "Get community insights", "☁"],
+          ["Start Group Buy", "Save more together", "👥"],
+          ["Add Vendor", "Share trusted vendor", "⌂"],
+          ["Write Review", "Help your community", "★"],
+        ].map(([title, subtitle, icon]) => `
+          <button class="quick-action" type="button">
+            <span class="quick-action__icon">${icon}</span>
+            <strong>${title}</strong>
+            <small>${subtitle}</small>
+          </button>
+        `).join("")}
       </section>
 
-      <section class="home-section">
-        <div class="section-head">
-          <h2>Featured vendors</h2>
-          <button class="link-btn" data-go="vendors">View all</button>
-        </div>
-        <div class="vendor-list">
-          ${data.vendors
-            .map(
-              (vendor) => `
-                <article class="vendor-card">
-                  <div class="vendor-icon">⌂</div>
-                  <div class="vendor-info">
-                    <div class="vendor-name">${vendor.name}</div>
-                    <div class="vendor-category">${vendor.category}</div>
+      <section class="content-grid">
+        <article class="panel panel--main panel--active">
+          <div class="panel__head"><h2>Active Group Buys</h2><button class="link-btn" data-go="groups">View all</button></div>
+          <div class="group-list">
+            ${groupBuys.map((group) => `
+              <div class="group-row">
+                <div class="group-row__thumb"></div>
+                <div class="group-row__body">
+                  <strong>${group.title}</strong>
+                  <span>${group.members}</span>
+                  <div class="group-row__meta">
+                    <div class="group-progress"><span style="width:${group.width}"></span></div>
+                    <small>${group.goal}</small>
+                    <small class="danger">${group.closing}</small>
                   </div>
-                  <div class="vendor-meta">
-                    <div class="vendor-rating">${vendor.rating} ★</div>
-                    <div class="vendor-uses">${vendor.uses}</div>
-                  </div>
-                </article>`,
-            )
-            .join("")}
-        </div>
+                </div>
+                <button class="join-btn" type="button">Join</button>
+              </div>
+            `).join("")}
+          </div>
+        </article>
+
+        <article class="panel panel--right panel--contributors">
+          <div class="panel__head"><h2>Top Contributors</h2><button class="link-btn" data-go="leaderboard">View all</button></div>
+          <div class="contributors">
+            ${contributors.map((person, index) => `
+              <div class="contributor-row">
+                <div class="contributor-row__rank">${index + 1}</div>
+                <div class="contributor-row__avatar"></div>
+                <div class="contributor-row__meta">
+                  <strong>${person.name}</strong>
+                  <span>${person.badge}</span>
+                </div>
+                <div class="contributor-row__points">${person.points}</div>
+              </div>
+            `).join("")}
+          </div>
+        </article>
+
+        <article class="panel panel--main panel--activity">
+          <div class="panel__head"><h2>Recent Activity</h2><button class="link-btn">View all</button></div>
+          <div class="activity-list">
+            ${recentActivity.map((item) => `
+              <div class="activity-row">
+                <div class="activity-row__icon">${item.icon}</div>
+                <div class="activity-row__body">
+                  <strong>${item.title}</strong>
+                  <span>${item.time}</span>
+                </div>
+                <div class="activity-row__points">${item.points}</div>
+              </div>
+            `).join("")}
+          </div>
+        </article>
+
+        <article class="panel panel--right panel--deals">
+          <div class="panel__head"><h2>Best Deals Right Now 🔥</h2><button class="link-btn" data-go="quotes">View all</button></div>
+          <div class="deals-row">
+            ${bestDeals.map((deal) => `
+              <div class="deal-card">
+                <div class="deal-card__img">${deal.img}</div>
+                <div class="deal-card__body">
+                  <strong>${deal.title}</strong>
+                  <div><span>Lowest Quote</span><b class="green">${deal.low}</b></div>
+                  <div><span>Highest Quote</span><b class="red">${deal.high}</b></div>
+                  <div><span>You Save</span><b class="green">${deal.save}</b></div>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+          <div class="deal-footer">
+            <div class="deal-footer__avatars">◔◑◐◓ <span>+13</span></div>
+            <div>18 residents interested</div>
+            <button class="join-btn join-btn--solid" type="button">View Quotes</button>
+          </div>
+        </article>
+
+        <article class="panel panel--right panel--invite">
+          <div class="invite-card">
+            <h2>Invite Your Neighbors</h2>
+            <p>More members, more savings!</p>
+            <button class="join-btn join-btn--solid" type="button">Invite Now</button>
+          </div>
+        </article>
+
+        <article class="panel panel--main panel--vendors">
+          <div class="panel__head"><h2>Popular Vendors in Avani Abode</h2><button class="link-btn" data-go="vendors">View all vendors</button></div>
+          <div class="vendor-strip">
+            ${data.vendors.map((vendor) => `
+              <div class="vendor-mini">
+                <div class="vendor-mini__icon">⌂</div>
+                <strong>${vendor.name}</strong>
+                <span>${vendor.category}</span>
+                <small>${vendor.uses}</small>
+              </div>
+            `).join("")}
+          </div>
+        </article>
       </section>
     </section>
   `;
@@ -405,6 +559,7 @@ navButtons.forEach((btn) => {
     setActive(view);
     routeTo(viewToPath(view));
     renderView(view);
+    setMobileMenu(false);
   });
 });
 
@@ -414,10 +569,6 @@ screen.addEventListener("click", (event) => {
   setActive(go);
   routeTo(viewToPath(go));
   renderView(go);
-});
-
-menuBtn?.addEventListener("click", () => {
-  appShell.classList.toggle("nav-open");
 });
 
 function openLoginModal() {
@@ -472,7 +623,9 @@ function notifyOpenerAndCloseSelf() {
   if (window.opener && !window.opener.closed) {
     window.opener.postMessage({ type: "oauth_success" }, window.location.origin);
     window.close();
+    return true;
   }
+  return false;
 }
 
 function handleAuthSuccess(user) {
@@ -482,7 +635,8 @@ function handleAuthSuccess(user) {
   setActive("home");
   setAuthError("");
   closeLoginModal();
-  notifyOpenerAndCloseSelf();
+  if (notifyOpenerAndCloseSelf()) return;
+  window.setTimeout(() => window.location.reload(), 120);
 }
 
 async function postJson(url, body) {
@@ -497,7 +651,11 @@ async function postJson(url, body) {
 
 document.addEventListener("click", (event) => {
   const action = event.target.closest("[data-action]")?.dataset.action;
-  if (action === "open-login") openLoginModal();
+  if (action === "toggle-nav") toggleMobileMenu();
+  if (action === "open-login") {
+    setMobileMenu(false);
+    openLoginModal();
+  }
   if (action === "close-login") closeLoginModal();
   if (action === "google-login") {
     const nextUrl = location.pathname || "/";
@@ -534,6 +692,10 @@ document.addEventListener("click", (event) => {
   }
 });
 
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setMobileMenu(false);
+});
+
 document.addEventListener("click", (event) => {
   const tab = event.target.closest("[data-auth-tab]");
   if (!tab) return;
@@ -563,6 +725,9 @@ document.addEventListener("submit", async (event) => {
     showSignupOtpStep();
     setOtpCountdown(20);
     return;
+  }
+  if (result.user) {
+    handleAuthSuccess(result.user);
   }
 });
 
