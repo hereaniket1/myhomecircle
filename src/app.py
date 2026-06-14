@@ -10,7 +10,24 @@ import psycopg2
 from flask import Flask, jsonify, render_template, request, redirect, session, url_for
 from authlib.integrations.flask_client import OAuth
 import resend
-from community_service import find_existing_communities, list_communities, register_community
+from community_service import (
+    find_existing_communities,
+    get_community_detail,
+    get_user_home_summary,
+    join_community,
+    list_communities,
+    register_community,
+)
+from settings_service import delete_my_data, get_settings_summary, leave_community, reset_all_data
+from notification_service import (
+    approve_join_request,
+    create_join_approval_notifications,
+    get_join_request_admin_context,
+    list_pending_join_requests,
+    list_notifications,
+    mark_notification_read,
+    reject_join_request,
+)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.getenv("SECRET_KEY", "dev-only-change-me")
@@ -232,7 +249,7 @@ def google_login():
     session["next_url"] = next_path
     session["oauth_popup"] = is_popup
     redirect_uri = os.getenv("GOOGLE_REDIRECT_URI") or url_for("google_callback", _external=True)
-    return google.authorize_redirect(redirect_uri)
+    return google.authorize_redirect(redirect_uri, prompt="select_account")
 
 
 @app.get("/auth/google/callback")
@@ -261,8 +278,7 @@ def auth_me():
 
 @app.get("/logout")
 def logout():
-    session.pop("app_user_id", None)
-    session.pop("current_user", None)
+    session.clear()
     return redirect("/")
 
 
@@ -284,15 +300,131 @@ def me():
     return jsonify(authed=True, user=user)
 
 
+@app.get("/api/me/home")
+def me_home():
+    user = current_user()
+    if not user:
+        return jsonify(authed=False), 401
+    return jsonify(authed=True, home=get_user_home_summary(db_conn, user["id"]))
+
+
 @app.get("/api/login-status")
 def login_status():
     return jsonify(authed=bool(current_user()), user=current_user())
 
 
+@app.get("/api/notifications")
+def api_notifications():
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required"), 401
+    return jsonify(ok=True, **list_notifications(db_conn, user["id"]))
+
+
+@app.post("/api/notifications/<notification_id>/read")
+def api_notification_read(notification_id):
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required"), 401
+    if not mark_notification_read(db_conn, notification_id, user["id"]):
+        return jsonify(error="Notification not found"), 404
+    return jsonify(ok=True)
+
+
+@app.post("/api/join-requests/<request_id>/approve")
+def api_join_request_approve(request_id):
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required"), 401
+    try:
+        result = approve_join_request(db_conn, request_id, user["id"])
+    except PermissionError as exc:
+        return jsonify(error=str(exc)), 403
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(ok=True, message="Join request approved", **result)
+
+
+@app.post("/api/join-requests/<request_id>/reject")
+def api_join_request_reject(request_id):
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required"), 401
+    try:
+        result = reject_join_request(db_conn, request_id, user["id"])
+    except PermissionError as exc:
+        return jsonify(error=str(exc)), 403
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(ok=True, message="Join request rejected", **result)
+
+
+@app.get("/approve/join/<request_id>")
+def approve_join_link(request_id):
+    if not current_user():
+        return redirect(url_for("login_google", next=request.path))
+    context = get_join_request_admin_context(db_conn, request_id)
+    if not context:
+        return redirect("/community?approval=failed")
+    return redirect(f"/community?community_id={context['community_id']}&join_request_id={request_id}")
+
+
+@app.get("/api/settings")
+def api_settings():
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required"), 401
+    return jsonify(ok=True, settings=get_settings_summary(db_conn, user))
+
+
+@app.post("/api/settings/leave-community")
+def api_leave_community():
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required"), 401
+    payload = request.get_json(force=True) or {}
+    community_id = payload.get("community_id")
+    if not community_id:
+        return jsonify(error="community_id is required"), 400
+    deleted = leave_community(db_conn, user["id"], community_id)
+    if not deleted:
+        return jsonify(error="Community membership not found"), 404
+    return jsonify(ok=True, message="You have left this community")
+
+
+@app.post("/api/settings/delete-my-data")
+def api_delete_my_data():
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required"), 401
+    payload = request.get_json(force=True) or {}
+    if payload.get("confirm") != "DELETE":
+        return jsonify(error="Type DELETE to confirm account deletion"), 400
+    delete_my_data(db_conn, user)
+    session.clear()
+    return jsonify(ok=True, message="Your account data has been deleted")
+
+
+@app.post("/api/settings/kill-all-data")
+def api_kill_all_data():
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required"), 401
+    payload = request.get_json(force=True) or {}
+    if payload.get("confirm") != "RESET":
+        return jsonify(error="Type RESET to confirm founder reset"), 400
+    try:
+        reset_all_data(db_conn, user)
+    except PermissionError as exc:
+        return jsonify(error=str(exc)), 403
+    session.clear()
+    return jsonify(ok=True, message="All app data has been erased")
+
+
 @app.get("/api/communities")
 def api_communities():
     search = request.args.get("q", "")
-    communities = list_communities(db_conn, search=search)
+    communities = list_communities(db_conn, search=search, limit=10)
     return jsonify(ok=True, communities=communities)
 
 
@@ -301,6 +433,54 @@ def api_communities_search_existing():
     payload = request.get_json(force=True) or {}
     matches = find_existing_communities(db_conn, payload)
     return jsonify(ok=True, matches=matches)
+
+
+@app.get("/api/communities/<community_id>")
+def api_community_detail(community_id):
+    user = current_user()
+    community = get_community_detail(db_conn, community_id, user["id"] if user else None)
+    if not community:
+        return jsonify(error="Community not found"), 404
+    return jsonify(ok=True, community=community)
+
+
+@app.get("/api/communities/<community_id>/join-requests")
+def api_community_join_requests(community_id):
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required"), 401
+    return jsonify(ok=True, **list_pending_join_requests(db_conn, community_id, user["id"]))
+
+
+@app.post("/api/communities/<community_id>/join")
+def api_community_join(community_id):
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required to join a community"), 401
+    payload = request.get_json(force=True) or {}
+    try:
+        result = join_community(db_conn, community_id, user["id"], payload)
+    except LookupError as exc:
+        return jsonify(error=str(exc)), 404
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    if result.get("join_request_id"):
+        context = get_join_request_admin_context(db_conn, result["join_request_id"])
+        if context:
+            approval_url = url_for(
+                "spa_fallback",
+                any_path="community",
+                community_id=context["community_id"],
+                join_request_id=result["join_request_id"],
+                _external=True,
+            )
+            create_join_approval_notifications(db_conn, context, approval_url)
+            for admin in context["admins"]:
+                try:
+                    send_join_approval_email(admin["email"], admin["full_name"], context, approval_url)
+                except Exception:
+                    app.logger.exception("Could not send join approval email to %s", admin["email"])
+    return jsonify(ok=True, **result)
 
 
 @app.post("/api/communities")
@@ -359,6 +539,35 @@ def send_email_otp(email: str, full_name: str, otp_code: str):
                 {otp_code}
               </div>
               <p style="margin: 12px 0 0;">This code expires in 10 minutes.</p>
+            </div>
+        """,
+    }
+    return resend.Emails.send(params)
+
+
+def send_join_approval_email(admin_email: str, admin_name: str, context: dict, approval_url: str):
+    api_key = os.getenv("RESEND_API_KEY")
+    if not api_key:
+        return None
+    resend.api_key = api_key
+    from_email = os.getenv("RESEND_FROM_EMAIL", "MyHomeCircle <no-reply@myhomecircle.app>")
+    params = {
+        "from": from_email,
+        "to": [admin_email],
+        "subject": f"Approval needed: {context['requester_name']} wants to join {context['community_name']}",
+        "html": f"""
+            <div style="font-family: Arial, sans-serif; color: #1c2430;">
+              <h2 style="margin: 0 0 12px;">Hi {admin_name or 'there'},</h2>
+              <p style="margin: 0 0 12px;">
+                {context['requester_name']} ({context['requester_email']}) requested to join
+                <strong>{context['community_name']}</strong> as <strong>{context['villa_number']}</strong>.
+              </p>
+              <p style="margin: 0 0 18px;">Open this approval link while logged in as a community admin:</p>
+              <p>
+                <a href="{approval_url}" style="display: inline-block; padding: 12px 18px; border-radius: 999px; background: #173f6b; color: #ffffff; text-decoration: none; font-weight: 700;">
+                  Approve member
+                </a>
+              </p>
             </div>
         """,
     }

@@ -9,7 +9,7 @@ const authError = document.getElementById("authError");
 let otpCountdownTimer = null;
 let otpCountdownRemaining = 20;
 
-const protectedViews = new Set(["vendors", "vendor_detail", "quotes", "groups", "group_detail", "leaderboard", "profile"]);
+const protectedViews = new Set(["vendors", "vendor_detail", "quotes", "groups", "group_detail", "leaderboard", "profile", "settings"]);
 const recentActivity = [
   { title: "Villa 300 uploaded a Solar Installation quote", time: "2h ago", points: "+50 points", icon: "▣" },
   { title: "Solar Group Buy reached 15 members", time: "3h ago", points: "", icon: "👥" },
@@ -31,6 +31,7 @@ const contributors = [
   { name: "Villa 215", points: "820 pts", badge: "Silver Badge" },
 ];
 let communitySearchTimer = null;
+let pendingCommunitySearch = "";
 
 const sampleVendorDetails = {
   name: "SolarBright Energy",
@@ -70,6 +71,213 @@ function escapeHtml(value = "") {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function getUserDisplay() {
+  const user = appState.currentUser;
+  const userName = user?.full_name || user?.name || user?.email || "User";
+  const firstNameSource = userName.includes("@") ? userName.split("@")[0] : userName;
+  return {
+    name: userName,
+    firstName: firstNameSource.trim().split(/\s+/)[0] || "User",
+    initial: userName.trim().charAt(0).toUpperCase() || "U",
+  };
+}
+
+function renderUserToolbar() {
+  if (!isAuthed()) return "";
+  const userDisplay = getUserDisplay();
+  const safeUserName = escapeHtml(userDisplay.name);
+  return `
+    <div class="dashboard-notification-wrap">
+      <button class="dashboard-notification" type="button" aria-label="Notifications" data-action="toggle-notifications">
+        <span>🔔</span>
+        <b id="notificationBadge" class="hidden">0</b>
+      </button>
+      <div id="notificationPanel" class="notification-panel hidden">
+        <div class="notification-panel__head">
+          <strong>Notifications</strong>
+        </div>
+        <div id="notificationList" class="notification-list">
+          <div class="notification-empty">Loading notifications...</div>
+        </div>
+      </div>
+    </div>
+    <div class="dashboard-user-chip" title="${safeUserName}">
+      <span>${escapeHtml(userDisplay.initial)}</span>
+      <strong>${safeUserName}</strong>
+    </div>
+    <a class="dashboard-auth-btn dashboard-auth-btn--ghost" href="/logout">Logout</a>
+  `;
+}
+
+function getHomeLine() {
+  if (!isAuthed()) return "Browse the public HomeCircle dashboard";
+  const home = appState.userHome;
+  if (home?.community?.name) {
+    const parts = [home.community.name];
+    if (home.villa_number) parts.push(home.villa_number);
+    if (home.status && home.status !== "ACTIVE") parts.push(`${home.status.toLowerCase()} approval`);
+    return parts.join(" • ");
+  }
+  return "";
+}
+
+function renderHomeLine() {
+  const line = getHomeLine();
+  if (line) return escapeHtml(line);
+  return `<button class="dashboard-home-link" type="button" data-go="community" data-open-community-form="true">Register your home today</button>`;
+}
+
+function renderDashboardHeader({ title, subtitle, searchValue = "" } = {}) {
+  const authAction = isAuthed()
+    ? renderUserToolbar()
+    : `<button class="dashboard-auth-btn" type="button" data-action="open-login">Signup/Login</button>`;
+  return `
+    <header class="dashboard-hero">
+      <div>
+        <h1>${title}</h1>
+        <p id="userHomeLine">${subtitle || renderHomeLine()}</p>
+      </div>
+      <div class="dashboard-hero__actions">
+        <div class="dashboard-hero__search">
+          <span>⌕</span>
+          <input id="dashboardSearch" type="search" value="${escapeHtml(searchValue)}" placeholder="Search community name, address, city, state, postal code..." />
+        </div>
+        ${authAction}
+      </div>
+    </header>
+  `;
+}
+
+function renderNotifications(notifications = []) {
+  if (!notifications.length) {
+    return `<div class="notification-empty">No notifications yet.</div>`;
+  }
+  return notifications.map((notification) => `
+    <article class="notification-item ${notification.read_at ? "" : "is-unread"}">
+      <div>
+        <strong>${escapeHtml(notification.title)}</strong>
+        <p>${escapeHtml(notification.body || "")}</p>
+      </div>
+      <div class="notification-actions">
+        ${notification.type === "JOIN_APPROVAL" ? `
+          <button class="notification-action-btn" type="button" data-action="open-notification" data-action-url="${escapeHtml(notification.action_url || "")}">
+            Open
+          </button>
+        ` : ""}
+        ${notification.type !== "JOIN_APPROVAL" && notification.action_url ? `<button class="notification-link" type="button" data-action="open-notification" data-action-url="${escapeHtml(notification.action_url)}">Open</button>` : ""}
+        ${notification.read_at ? "" : `
+          <button class="notification-link" type="button" data-action="mark-notification-read" data-notification-id="${escapeHtml(notification.id)}">
+            Mark read
+          </button>
+        `}
+      </div>
+    </article>
+  `).join("");
+}
+
+function renderPendingApprovals(requests = [], focusRequestId = "", members = []) {
+  if (!requests.length) {
+    return `
+      <section class="community-approval-panel">
+        <div class="panel__head">
+          <h3>Pending approvals</h3>
+        </div>
+        <div class="community-empty">No pending member approvals.</div>
+        ${members.length ? `
+          <div class="community-approval-list">
+            ${members.map((member) => `
+              <article class="community-approval-row">
+                <div>
+                  <strong>${escapeHtml(member.requester_name)}</strong>
+                  <span>${escapeHtml(member.requester_email)} • ${escapeHtml(member.villa_number || "No villa")}</span>
+                </div>
+                <div class="community-member-status">${escapeHtml(member.role)} • ${escapeHtml(member.status)}</div>
+              </article>
+            `).join("")}
+          </div>
+        ` : ""}
+      </section>
+    `;
+  }
+  return `
+    <section class="community-approval-panel">
+      <div class="panel__head">
+        <h3>Pending approvals</h3>
+        <span>${requests.length} waiting</span>
+      </div>
+      <div class="community-approval-list">
+        ${requests.map((request) => `
+          <article class="community-approval-row ${request.id === focusRequestId ? "is-focused" : ""}">
+            <div>
+              <strong>${escapeHtml(request.requester_name)}</strong>
+              <span>${escapeHtml(request.requester_email)} • ${escapeHtml(request.villa_number || "No villa")}</span>
+            </div>
+            <div class="community-approval-actions">
+              <button class="notification-action-btn" type="button" data-action="approve-join-request" data-request-id="${escapeHtml(request.id)}">
+                Approve
+              </button>
+              <button class="settings-danger-btn settings-danger-btn--ghost" type="button" data-action="reject-join-request" data-request-id="${escapeHtml(request.id)}">
+                Reject
+              </button>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+      <div id="communityApprovalMessage" class="community-form-message"></div>
+    </section>
+  `;
+}
+
+async function loadNotifications() {
+  if (!isAuthed()) return;
+  const badge = document.getElementById("notificationBadge");
+  const list = document.getElementById("notificationList");
+  try {
+    const response = await fetch("/api/notifications");
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Unable to load notifications");
+    if (badge) {
+      badge.textContent = result.unread_count || 0;
+      badge.classList.toggle("hidden", !result.unread_count);
+    }
+    if (list) list.innerHTML = renderNotifications(result.notifications || []);
+  } catch (error) {
+    if (list) list.innerHTML = `<div class="notification-empty">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function loadUserHome({ refresh = true } = {}) {
+  if (!isAuthed() || appState.userHomeLoaded) return;
+  try {
+    const response = await fetch("/api/me/home");
+    const result = await response.json().catch(() => ({}));
+    if (response.ok) {
+      appState.userHome = result.home || null;
+      appState.userHomeLoaded = true;
+      const homeLine = document.getElementById("userHomeLine");
+      if (homeLine) homeLine.innerHTML = renderHomeLine();
+      if (refresh && (appState.currentView === "home" || appState.currentView === "community")) {
+        renderView(appState.currentView);
+      }
+    }
+  } catch (error) {
+    appState.userHomeLoaded = true;
+  }
+}
+
+function refreshUserHome() {
+  appState.userHomeLoaded = false;
+  appState.userHome = null;
+  loadUserHome({ refresh: false });
+}
+
+function navigateToView(view) {
+  setActive(view);
+  routeTo(viewToPath(view));
+  renderView(view);
+  setMobileMenu(false);
 }
 
 function setActive(view) {
@@ -129,41 +337,11 @@ function renderAuthGate(view) {
 
 function renderHome() {
   const data = sections.home;
-  const user = appState.currentUser;
-  const userName = user?.full_name || user?.name || user?.email || "User";
-  const firstNameSource = userName.includes("@") ? userName.split("@")[0] : userName;
-  const firstName = firstNameSource.trim().split(/\s+/)[0] || "User";
-  const title = isAuthed() && user ? `Welcome ${escapeHtml(firstName)}` : "Welcome to HomeCircle";
-  const userInitial = userName.trim().charAt(0).toUpperCase() || "U";
-  const safeUserName = escapeHtml(userName);
-  const authAction = isAuthed()
-    ? `
-      <button class="dashboard-notification" type="button" aria-label="Notifications">
-        <span>🔔</span>
-        <b>3</b>
-      </button>
-      <div class="dashboard-user-chip" title="${safeUserName}">
-        <span>${escapeHtml(userInitial)}</span>
-        <strong>${safeUserName}</strong>
-      </div>
-      <a class="dashboard-auth-btn dashboard-auth-btn--ghost" href="/logout">Logout</a>
-    `
-    : `<button class="dashboard-auth-btn" type="button" data-action="open-login">Signup/Login</button>`;
+  const userDisplay = getUserDisplay();
+  const title = `${isAuthed() ? `Welcome ${escapeHtml(userDisplay.firstName)}` : "Welcome to HomeCircle"} 👋`;
   screen.innerHTML = `
     <section class="dashboard-grid">
-      <header class="dashboard-hero">
-        <div>
-          <h1>${title} 👋</h1>
-          <p>${isAuthed() ? "Avani Abode • Villa 300" : "Browse the public HomeCircle dashboard"}</p>
-        </div>
-        <div class="dashboard-hero__actions">
-          <div class="dashboard-hero__search">
-            <span>⌕</span>
-            <input type="text" value="" placeholder="Search vendors, quotes, group buys..." />
-          </div>
-          ${authAction}
-        </div>
-      </header>
+      ${renderDashboardHeader({ title })}
 
       <section class="summary-card">
         <div class="summary-card__main">
@@ -296,6 +474,7 @@ function renderHome() {
       </section>
     </section>
   `;
+  loadUserHome();
 }
 
 function communityAddressLine(address = {}) {
@@ -329,7 +508,7 @@ function renderCommunityList(communities = []) {
       year: "numeric",
     }) : "Recently";
     return `
-      <article class="community-card">
+      <article class="community-card community-card--clickable" data-community-card-id="${escapeHtml(community.id)}">
         <div class="community-card__mark">${escapeHtml(community.name?.charAt(0) || "C")}</div>
         <div>
           <div class="community-card__top">
@@ -342,6 +521,118 @@ function renderCommunityList(communities = []) {
       </article>
     `;
   }).join("");
+}
+
+function renderCommunityDetail(community) {
+  const panel = document.getElementById("communityDetail");
+  if (!panel) return;
+  const member = community.current_member;
+  const canChooseAdmin = Boolean(community.can_choose_admin);
+  const address = communityAddressLine(community.address);
+  const memberState = member
+    ? `<div class="community-join-state">You are already registered as <strong>${escapeHtml(member.role)}</strong> with status <strong>${escapeHtml(member.status)}</strong>.</div>`
+    : "";
+  const joinForm = member ? "" : `
+    <form class="community-join-form" id="communityJoinForm" data-community-id="${escapeHtml(community.id)}">
+      <label>
+        <span>Villa / flat number</span>
+        <input name="villa_number" required placeholder="Villa 300" />
+      </label>
+      <div class="community-role-options">
+        <label>
+          <input type="radio" name="role" value="RESIDENT" checked />
+          <span>Join as member</span>
+        </label>
+        ${canChooseAdmin ? `
+          <label>
+            <input type="radio" name="role" value="ADMIN" />
+            <span>Become admin</span>
+          </label>
+        ` : ""}
+      </div>
+      ${canChooseAdmin ? `
+        <div class="community-admin-settings hidden">
+          <label>
+            <span>Require admin approval for future members</span>
+            <input type="checkbox" name="require_admin_approval" checked />
+          </label>
+          <label>
+            <span>Allow anonymous reviews</span>
+            <input type="checkbox" name="allow_anonymous_reviews" checked />
+          </label>
+          <label>
+            <span>Show vendors to community members</span>
+            <input type="checkbox" name="allow_vendor_visibility" checked />
+          </label>
+          <label>
+            <span>Enable points and rewards</span>
+            <input type="checkbox" name="points_enabled" checked />
+          </label>
+        </div>
+      ` : ""}
+      <button class="primary-big primary-big--compact" type="submit">Request to join</button>
+      <div id="communityJoinMessage" class="community-form-message"></div>
+    </form>
+  `;
+
+  panel.classList.remove("hidden");
+  panel.innerHTML = `
+    <div class="panel__head">
+      <h2>${escapeHtml(community.name)}</h2>
+      <button class="link-btn" type="button" data-action="close-community-detail">Close</button>
+    </div>
+    <p>${escapeHtml(address)}</p>
+    <div class="community-detail-meta">
+      <span>${escapeHtml(community.status)}</span>
+      <span>${community.active_member_count || 0} active members</span>
+      <span>${community.active_admin_count || 0} admins</span>
+      <span>Approval ${community.settings?.require_admin_approval ? "enabled" : "disabled"}</span>
+    </div>
+    <div id="communityPendingApprovals"></div>
+    ${isAuthed() ? memberState + joinForm : `
+      <div class="community-join-state">
+        Login to request registration in this community.
+        <button class="dashboard-auth-btn" type="button" data-action="open-login">Signup/Login</button>
+      </div>
+    `}
+  `;
+  loadPendingApprovals(community.id, appState.focusJoinRequestId || "");
+  appState.focusJoinRequestId = "";
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function loadPendingApprovals(communityId, focusRequestId = "") {
+  const box = document.getElementById("communityPendingApprovals");
+  if (!box || !isAuthed()) return;
+  try {
+    const response = await fetch(`/api/communities/${encodeURIComponent(communityId)}/join-requests`);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.can_manage) {
+      box.innerHTML = "";
+      return;
+    }
+    box.innerHTML = renderPendingApprovals(result.requests || [], focusRequestId, result.members || []);
+  } catch (error) {
+    box.innerHTML = "";
+  }
+}
+
+async function loadCommunityDetail(communityId, focusRequestId = "") {
+  const panel = document.getElementById("communityDetail");
+  appState.currentCommunityId = communityId;
+  appState.focusJoinRequestId = focusRequestId || "";
+  if (panel) {
+    panel.classList.remove("hidden");
+    panel.innerHTML = `<div class="community-empty">Loading community details...</div>`;
+  }
+  try {
+    const response = await fetch(`/api/communities/${encodeURIComponent(communityId)}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Unable to load community");
+    renderCommunityDetail(result.community);
+  } catch (error) {
+    if (panel) panel.innerHTML = `<div class="community-error">${escapeHtml(error.message)}</div>`;
+  }
 }
 
 function renderCommunityMatches(matches = []) {
@@ -391,26 +682,16 @@ async function checkExistingCommunities(form) {
 }
 
 function renderCommunity() {
-  const registerAction = isAuthed()
-    ? `<button class="dashboard-auth-btn" type="button" data-action="toggle-community-form">Register my community</button>`
-    : "";
+  const userDisplay = getUserDisplay();
+  const title = `${isAuthed() ? `Welcome ${escapeHtml(userDisplay.firstName)}` : "Welcome to HomeCircle"} 👋`;
+  const search = pendingCommunitySearch;
+  const showRegisterForm = Boolean(appState.openCommunityForm);
+  appState.openCommunityForm = false;
   screen.innerHTML = `
     <section class="community-page">
-      <header class="community-hero">
-        <div>
-          <div class="kicker">Communities</div>
-          <h1>Find your community</h1>
-          <p>View registered communities by newest registration date and search by name, address, city, state, or postal code.</p>
-        </div>
-        ${registerAction}
-      </header>
+      ${renderDashboardHeader({ title, searchValue: search })}
 
-      <div class="community-search">
-        <span>⌕</span>
-        <input id="communitySearch" type="search" placeholder="Search community name, address, city, state, postal code..." />
-      </div>
-
-      <section class="community-register hidden" id="communityRegister">
+      <section class="community-register ${showRegisterForm && isAuthed() ? "" : "hidden"}" id="communityRegister">
         <div class="panel__head">
           <h2>Register my community</h2>
           <button class="link-btn" type="button" data-action="toggle-community-form">Close</button>
@@ -432,6 +713,8 @@ function renderCommunity() {
         </form>
       </section>
 
+      <section class="community-detail hidden" id="communityDetail"></section>
+
       <section class="community-results">
         <div class="panel__head">
           <h2>Registered communities</h2>
@@ -441,7 +724,13 @@ function renderCommunity() {
       </section>
     </section>
   `;
-  loadCommunities();
+  loadUserHome();
+  loadCommunities(search);
+  const params = new URLSearchParams(window.location.search);
+  const communityId = params.get("community_id");
+  if (communityId) {
+    window.setTimeout(() => loadCommunityDetail(communityId, params.get("join_request_id") || ""), 0);
+  }
 }
 
 function renderVendors() {
@@ -665,6 +954,95 @@ function renderProfile() {
   `;
 }
 
+function renderSettingsMemberships(memberships = []) {
+  if (!memberships.length) {
+    return `<div class="settings-empty">You are not registered in any community yet.</div>`;
+  }
+  return memberships.map((membership) => `
+    <article class="settings-membership">
+      <div>
+        <strong>${escapeHtml(membership.community_name)}</strong>
+        <span>${escapeHtml(membership.villa_number || "No villa number")} • ${escapeHtml(membership.role)} • ${escapeHtml(membership.status)}</span>
+      </div>
+      <button class="settings-danger-btn settings-danger-btn--ghost" type="button" data-action="leave-community" data-community-id="${escapeHtml(membership.community_id)}">
+        Leave community
+      </button>
+    </article>
+  `).join("");
+}
+
+function renderSettings() {
+  const userDisplay = getUserDisplay();
+  screen.innerHTML = `
+    <section class="settings-page">
+      ${renderDashboardHeader({ title: `Settings for ${escapeHtml(userDisplay.firstName)}` })}
+
+      <section class="settings-card">
+        <div>
+          <div class="kicker">Community Access</div>
+          <h2>Your communities</h2>
+          <p>Opt out of a community. This removes your membership and related member-owned community data through the schema cascades.</p>
+        </div>
+        <div id="settingsMemberships" class="settings-memberships">
+          <div class="settings-empty">Loading your communities...</div>
+        </div>
+      </section>
+
+      <section class="settings-card settings-card--danger">
+        <div>
+          <div class="kicker">My Data</div>
+          <h2>Delete my account data</h2>
+          <p>This deletes only your account, auth identities, OTP rows for your email, memberships, and rows connected to your memberships. Other users remain untouched.</p>
+        </div>
+        <label class="settings-confirm">
+          <span>Type DELETE to confirm</span>
+          <input id="deleteMyDataConfirm" type="text" autocomplete="off" placeholder="DELETE" />
+        </label>
+        <button class="settings-danger-btn" type="button" data-action="delete-my-data">Delete my data</button>
+      </section>
+
+      <section id="founderKillSection" class="settings-card settings-card--kill hidden">
+        <div>
+          <div class="kicker">Founder Reset</div>
+          <h2>Kill Button</h2>
+          <p>Founder-only reset for restarting the service from scratch. This erases all data from every app table.</p>
+        </div>
+        <label class="settings-confirm">
+          <span>Type RESET to confirm</span>
+          <input id="killAllDataConfirm" type="text" autocomplete="off" placeholder="RESET" />
+        </label>
+        <button class="settings-kill-btn" type="button" data-action="kill-all-data">Kill Button</button>
+      </section>
+
+      <div id="settingsMessage" class="settings-message"></div>
+    </section>
+  `;
+  loadUserHome();
+  loadSettings();
+}
+
+async function loadSettings() {
+  const memberships = document.getElementById("settingsMemberships");
+  const founderKillSection = document.getElementById("founderKillSection");
+  try {
+    const response = await fetch("/api/settings");
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Unable to load settings");
+    if (memberships) memberships.innerHTML = renderSettingsMemberships(result.settings?.memberships || []);
+    founderKillSection?.classList.toggle("hidden", !result.settings?.is_founder);
+  } catch (error) {
+    if (memberships) memberships.innerHTML = `<div class="settings-error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function setSettingsMessage(message, isError = false) {
+  const box = document.getElementById("settingsMessage");
+  if (!box) return;
+  box.textContent = message;
+  box.classList.toggle("is-error", isError);
+  box.classList.toggle("is-success", !isError && Boolean(message));
+}
+
 function renderRequirements() {
   const data = sections.requirements;
   screen.innerHTML = `
@@ -687,6 +1065,7 @@ function renderRequirements() {
 }
 
 function renderView(view) {
+  appState.currentView = view;
   if (protectedViews.has(view) && !isAuthed()) {
     renderAuthGate(view);
     return;
@@ -700,41 +1079,147 @@ function renderView(view) {
   else if (view === "group_detail") renderGroupDetail();
   else if (view === "leaderboard") renderLeaderboard();
   else if (view === "profile") renderProfile();
+  else if (view === "settings") renderSettings();
   else renderRequirements();
+  if (isAuthed()) loadNotifications();
 }
 
 navButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     const view = btn.dataset.view;
-    setActive(view);
-    routeTo(viewToPath(view));
-    renderView(view);
-    setMobileMenu(false);
+    if (view === "community") pendingCommunitySearch = "";
+    navigateToView(view);
   });
 });
 
 screen.addEventListener("click", (event) => {
+  if (event.target.closest("#communityJoinForm")) {
+    return;
+  }
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (action === "toggle-community-form") {
     document.getElementById("communityRegister")?.classList.toggle("hidden");
     return;
   }
+  if (action === "close-community-detail") {
+    document.getElementById("communityDetail")?.classList.add("hidden");
+    return;
+  }
+  if (action === "toggle-notifications") {
+    document.getElementById("notificationPanel")?.classList.toggle("hidden");
+    loadNotifications();
+    return;
+  }
+  if (action === "mark-notification-read") {
+    handleMarkNotificationRead(event.target.closest("[data-notification-id]")?.dataset.notificationId);
+    return;
+  }
+  if (action === "open-notification") {
+    handleOpenNotification(event.target.closest("[data-action-url]")?.dataset.actionUrl);
+    return;
+  }
+  if (action === "approve-join-request") {
+    handleApproveJoinRequest(event.target.closest("[data-request-id]")?.dataset.requestId);
+    return;
+  }
+  if (action === "reject-join-request") {
+    handleRejectJoinRequest(event.target.closest("[data-request-id]")?.dataset.requestId);
+    return;
+  }
+  if (action === "leave-community") {
+    handleLeaveCommunity(event.target.closest("[data-community-id]")?.dataset.communityId);
+    return;
+  }
+  if (action === "delete-my-data") {
+    handleDeleteMyData();
+    return;
+  }
+  if (action === "kill-all-data") {
+    handleKillAllData();
+    return;
+  }
+
+  const communityCard = event.target.closest("[data-community-card-id]");
+  if (communityCard) {
+    loadCommunityDetail(communityCard.dataset.communityCardId);
+    return;
+  }
 
   const go = event.target.closest("[data-go]")?.dataset.go;
   if (!go) return;
-  setActive(go);
-  routeTo(viewToPath(go));
-  renderView(go);
+  if (go === "community") {
+    pendingCommunitySearch = "";
+    appState.openCommunityForm = event.target.closest("[data-open-community-form]")?.dataset.openCommunityForm === "true";
+    if (appState.openCommunityForm && !isAuthed()) {
+      openLoginModal();
+      return;
+    }
+  }
+  navigateToView(go);
 });
 
 screen.addEventListener("input", (event) => {
-  if (event.target?.id === "communitySearch") {
+  if (event.target?.id === "dashboardSearch" && appState.currentView === "community") {
+    pendingCommunitySearch = event.target.value.trim();
     clearTimeout(communitySearchTimer);
-    communitySearchTimer = window.setTimeout(() => loadCommunities(event.target.value.trim()), 250);
+    communitySearchTimer = window.setTimeout(() => loadCommunities(pendingCommunitySearch), 250);
+  }
+});
+
+screen.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.target?.id !== "dashboardSearch") return;
+  event.preventDefault();
+  pendingCommunitySearch = event.target.value.trim();
+  if (appState.currentView === "community") {
+    loadCommunities(pendingCommunitySearch);
+    return;
+  }
+  navigateToView("community");
+});
+
+screen.addEventListener("change", (event) => {
+  if (event.target?.name === "role" && event.target.closest("#communityJoinForm")) {
+    const form = event.target.closest("#communityJoinForm");
+    form.querySelector(".community-admin-settings")?.classList.toggle(
+      "hidden",
+      form.querySelector('input[name="role"]:checked')?.value !== "ADMIN",
+    );
   }
 });
 
 screen.addEventListener("submit", async (event) => {
+  const joinForm = event.target.closest("#communityJoinForm");
+  if (joinForm) {
+    event.preventDefault();
+    const message = document.getElementById("communityJoinMessage");
+    const formData = new FormData(joinForm);
+    const payload = Object.fromEntries(formData.entries());
+    payload.require_admin_approval = formData.get("require_admin_approval") === "on";
+    payload.allow_anonymous_reviews = formData.get("allow_anonymous_reviews") === "on";
+    payload.allow_vendor_visibility = formData.get("allow_vendor_visibility") === "on";
+    payload.points_enabled = formData.get("points_enabled") === "on";
+    if (message) {
+      message.className = "community-form-message";
+      message.textContent = "Submitting registration request...";
+    }
+    const { response, json } = await postJson(`/api/communities/${joinForm.dataset.communityId}/join`, payload);
+    if (!response.ok) {
+      if (message) {
+        message.classList.add("is-error");
+        message.textContent = json.error || "Unable to join community";
+      }
+      if (response.status === 401) openLoginModal();
+      return;
+    }
+    if (message) {
+      message.classList.add("is-success");
+      message.textContent = json.message || "Community registration submitted.";
+    }
+    refreshUserHome();
+    loadCommunityDetail(joinForm.dataset.communityId);
+    return;
+  }
+
   const form = event.target.closest("#communityForm");
   if (!form) return;
   event.preventDefault();
@@ -761,7 +1246,7 @@ screen.addEventListener("submit", async (event) => {
   form.reset();
   form.querySelector('input[name="country"]').value = "India";
   renderCommunityMatches([]);
-  loadCommunities(document.getElementById("communitySearch")?.value?.trim() || "");
+  loadCommunities(document.getElementById("dashboardSearch")?.value?.trim() || pendingCommunitySearch);
 });
 
 function openLoginModal() {
@@ -824,6 +1309,8 @@ function notifyOpenerAndCloseSelf() {
 function handleAuthSuccess(user) {
   appState.authed = true;
   appState.currentUser = user;
+  appState.userHomeLoaded = false;
+  appState.userHome = null;
   renderView("home");
   setActive("home");
   setAuthError("");
@@ -840,6 +1327,109 @@ async function postJson(url, body) {
   });
   const json = await response.json().catch(() => ({}));
   return { response, json };
+}
+
+async function handleLeaveCommunity(communityId) {
+  if (!communityId) return;
+  setSettingsMessage("Leaving community...");
+  const { response, json } = await postJson("/api/settings/leave-community", { community_id: communityId });
+  if (!response.ok) {
+    setSettingsMessage(json.error || "Unable to leave community", true);
+    return;
+  }
+  setSettingsMessage(json.message || "You have left this community");
+  refreshUserHome();
+  loadSettings();
+}
+
+async function handleMarkNotificationRead(notificationId) {
+  if (!notificationId) return;
+  const { response } = await postJson(`/api/notifications/${notificationId}/read`, {});
+  if (response.ok) loadNotifications();
+}
+
+function handleOpenNotification(actionUrl = "") {
+  if (!actionUrl) return;
+  const url = new URL(actionUrl, window.location.origin);
+  const communityId = url.searchParams.get("community_id");
+  const joinRequestId = url.searchParams.get("join_request_id");
+  document.getElementById("notificationPanel")?.classList.add("hidden");
+  if (communityId) {
+    pendingCommunitySearch = "";
+    navigateToView("community");
+    window.setTimeout(() => loadCommunityDetail(communityId, joinRequestId || ""), 0);
+    return;
+  }
+  window.location.href = url.toString();
+}
+
+async function handleApproveJoinRequest(requestId) {
+  if (!requestId) return;
+  const { response, json } = await postJson(`/api/join-requests/${requestId}/approve`, {});
+  if (!response.ok) {
+    const message = document.getElementById("communityApprovalMessage");
+    if (message) {
+      message.className = "community-form-message is-error";
+      message.textContent = json.error || "Unable to approve request";
+    }
+    return;
+  }
+  await loadNotifications();
+  const message = document.getElementById("communityApprovalMessage");
+  if (message) {
+    message.className = "community-form-message is-success";
+    message.textContent = json.message || "Join request approved";
+  }
+  if (appState.currentView === "community") {
+    loadCommunities(pendingCommunitySearch);
+    if (appState.currentCommunityId) loadCommunityDetail(appState.currentCommunityId);
+  }
+}
+
+async function handleRejectJoinRequest(requestId) {
+  if (!requestId) return;
+  const { response, json } = await postJson(`/api/join-requests/${requestId}/reject`, {});
+  const message = document.getElementById("communityApprovalMessage");
+  if (!response.ok) {
+    if (message) {
+      message.className = "community-form-message is-error";
+      message.textContent = json.error || "Unable to reject request";
+    }
+    return;
+  }
+  await loadNotifications();
+  if (message) {
+    message.className = "community-form-message is-success";
+    message.textContent = json.message || "Join request rejected";
+  }
+  if (appState.currentView === "community") {
+    loadCommunities(pendingCommunitySearch);
+    if (appState.currentCommunityId) loadCommunityDetail(appState.currentCommunityId);
+  }
+}
+
+async function handleDeleteMyData() {
+  const confirm = document.getElementById("deleteMyDataConfirm")?.value?.trim();
+  setSettingsMessage("Deleting your account data...");
+  const { response, json } = await postJson("/api/settings/delete-my-data", { confirm });
+  if (!response.ok) {
+    setSettingsMessage(json.error || "Unable to delete your data", true);
+    return;
+  }
+  setSettingsMessage(json.message || "Your account data has been deleted");
+  window.setTimeout(() => window.location.reload(), 300);
+}
+
+async function handleKillAllData() {
+  const confirm = document.getElementById("killAllDataConfirm")?.value?.trim();
+  setSettingsMessage("Erasing all app data...");
+  const { response, json } = await postJson("/api/settings/kill-all-data", { confirm });
+  if (!response.ok) {
+    setSettingsMessage(json.error || "Unable to reset all data", true);
+    return;
+  }
+  setSettingsMessage(json.message || "All app data has been erased");
+  window.setTimeout(() => window.location.reload(), 300);
 }
 
 document.addEventListener("click", (event) => {
