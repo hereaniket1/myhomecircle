@@ -1,8 +1,35 @@
+import re
 from typing import Any
 
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _like_term(value: str) -> str:
+    return f"%{value}%"
+
+
+def _distinctive_tokens(*values: str) -> set[str]:
+    stop_words = {
+        "near",
+        "phase",
+        "road",
+        "street",
+        "block",
+        "cross",
+        "india",
+        "bengaluru",
+        "bangalore",
+        "karnataka",
+    }
+    text = " ".join(_clean(value).lower() for value in values)
+    tokens = set(re.findall(r"[a-z0-9]+", text))
+    return {
+        token
+        for token in tokens
+        if len(token) >= 4 and token not in stop_words and not token.isdigit()
+    }
 
 
 def _community_row_to_dict(row):
@@ -55,6 +82,7 @@ def get_user_home_summary(db_conn, app_user_id: str):
                 FROM community_members cm
                 JOIN communities c ON c.id = cm.community_id
                 WHERE cm.app_user_id = %s
+                  AND cm.status IN ('ACTIVE', 'PENDING')
                 ORDER BY
                     CASE cm.status WHEN 'ACTIVE' THEN 0 WHEN 'PENDING' THEN 1 ELSE 2 END,
                     cm.created_at DESC
@@ -192,7 +220,9 @@ def get_community_detail(db_conn, community_id: str, app_user_id: str | None = N
                     """
                     SELECT id, app_user_id, community_id, villa_number, role, status, created_at
                     FROM community_members
-                    WHERE community_id = %s AND app_user_id = %s
+                    WHERE community_id = %s
+                      AND app_user_id = %s
+                      AND status IN ('ACTIVE', 'PENDING')
                     """,
                     (community_id, app_user_id),
                 )
@@ -319,33 +349,45 @@ def join_community(db_conn, community_id: str, app_user_id: str, payload: dict[s
 def find_existing_communities(db_conn, payload: dict[str, Any], limit: int = 10):
     name = _clean(payload.get("name"))
     address_line_1 = _clean(payload.get("address_line_1"))
+    address_line_2 = _clean(payload.get("address_line_2"))
     locality = _clean(payload.get("locality"))
     city = _clean(payload.get("city"))
     state = _clean(payload.get("state"))
     postal_code = _clean(payload.get("postal_code"))
 
-    terms = [term for term in [name, address_line_1, locality, city, state, postal_code] if term]
-    if not terms:
+    input_tokens = _distinctive_tokens(name, address_line_1, address_line_2, locality)
+    if not name and not input_tokens:
         return []
 
     clauses = []
     params = []
-    if name:
+    if len(name) >= 4:
         clauses.append("(LOWER(c.name) = LOWER(%s) OR c.name ILIKE %s)")
-        params.extend([name, f"%{name}%"])
-    if address_line_1:
+        params.extend([name, _like_term(name)])
+    if len(address_line_1) >= 8:
         clauses.append("a.address_line_1 ILIKE %s")
-        params.append(f"%{address_line_1}%")
-    if locality and city:
-        clauses.append("(COALESCE(a.locality, '') ILIKE %s AND COALESCE(a.city, '') ILIKE %s)")
-        params.extend([f"%{locality}%", f"%{city}%"])
-    if postal_code:
-        clauses.append("COALESCE(a.postal_code, '') = %s")
-        params.append(postal_code)
+        params.append(_like_term(address_line_1))
+    if len(address_line_2) >= 8:
+        clauses.append("COALESCE(a.address_line_2, '') ILIKE %s")
+        params.append(_like_term(address_line_2))
+    for token in sorted(input_tokens):
+        clauses.append(
+            """
+            (
+                c.name ILIKE %s
+                OR COALESCE(a.address_line_1, '') ILIKE %s
+                OR COALESCE(a.address_line_2, '') ILIKE %s
+                OR COALESCE(a.locality, '') ILIKE %s
+            )
+            """
+        )
+        token_like = _like_term(token)
+        params.extend([token_like, token_like, token_like, token_like])
     if not clauses:
         return []
 
-    params.append(max(1, min(int(limit or 10), 25)))
+    query_limit = max(1, min(int(limit or 10) * 4, 50))
+    params.append(query_limit)
     query = f"""
         SELECT
             c.id,
@@ -374,7 +416,37 @@ def find_existing_communities(db_conn, payload: dict[str, Any], limit: int = 10)
     try:
         with conn.cursor() as cur:
             cur.execute(query, tuple(params))
-            return [_community_row_to_dict(row) for row in cur.fetchall()]
+            matches = []
+            for row in cur.fetchall():
+                community = _community_row_to_dict(row)
+                address = community.get("address") or {}
+                existing_tokens = _distinctive_tokens(
+                    community.get("name"),
+                    address.get("address_line_1"),
+                    address.get("address_line_2"),
+                    address.get("locality"),
+                )
+                name_match = bool(
+                    name
+                    and community.get("name")
+                    and (
+                        community["name"].strip().lower() == name.lower()
+                        or (len(name) >= 5 and name.lower() in community["name"].lower())
+                        or (len(community["name"]) >= 5 and community["name"].lower() in name.lower())
+                    )
+                )
+                address_overlap = len(input_tokens & existing_tokens)
+                same_area = bool(
+                    postal_code
+                    and address.get("postal_code") == postal_code
+                    and (not city or (address.get("city") or "").lower() == city.lower())
+                    and (not state or (address.get("state") or "").lower() == state.lower())
+                )
+                if name_match or address_overlap >= 2 or (address_overlap >= 1 and same_area):
+                    matches.append(community)
+                if len(matches) >= max(1, min(int(limit or 10), 25)):
+                    break
+            return matches
     finally:
         conn.close()
 

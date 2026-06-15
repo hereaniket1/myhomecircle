@@ -1,42 +1,52 @@
+from threading import Lock
 from typing import Any
 
+_notifications_table_ready = False
+_notifications_table_lock = Lock()
 
 def ensure_notifications_table(db_conn):
-    conn = db_conn()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS app_notifications (
-                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                        app_user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-                        notification_type VARCHAR(50) NOT NULL,
-                        title VARCHAR(200) NOT NULL,
-                        body TEXT,
-                        action_url TEXT,
-                        reference_type VARCHAR(50),
-                        reference_id UUID,
-                        read_at TIMESTAMPTZ,
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    global _notifications_table_ready
+    if _notifications_table_ready:
+        return
+    with _notifications_table_lock:
+        if _notifications_table_ready:
+            return
+        conn = db_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS app_notifications (
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            app_user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+                            notification_type VARCHAR(50) NOT NULL,
+                            title VARCHAR(200) NOT NULL,
+                            body TEXT,
+                            action_url TEXT,
+                            reference_type VARCHAR(50),
+                            reference_id UUID,
+                            read_at TIMESTAMPTZ,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
                     )
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_app_notifications_user_created
-                    ON app_notifications(app_user_id, created_at DESC)
-                    """
-                )
-                cur.execute(
-                    """
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_app_notifications_unique_reference
-                    ON app_notifications(app_user_id, notification_type, reference_type, reference_id)
-                    WHERE reference_id IS NOT NULL
-                    """
-                )
-    finally:
-        conn.close()
+                    cur.execute(
+                        """
+                        CREATE INDEX IF NOT EXISTS idx_app_notifications_user_created
+                        ON app_notifications(app_user_id, created_at DESC)
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_app_notifications_unique_reference
+                        ON app_notifications(app_user_id, notification_type, reference_type, reference_id)
+                        WHERE reference_id IS NOT NULL
+                        """
+                    )
+            _notifications_table_ready = True
+        finally:
+            conn.close()
 
 
 def _notification_row_to_dict(row):
@@ -89,6 +99,32 @@ def mark_notification_read(db_conn, notification_id, app_user_id):
     try:
         with conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT notification_type, reference_type, reference_id
+                    FROM app_notifications
+                    WHERE id = %s AND app_user_id = %s
+                    """,
+                    (notification_id, app_user_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return False
+
+                notification_type, reference_type, reference_id = row
+                if notification_type == "JOIN_APPROVAL" and reference_type == "community_join_requests" and reference_id:
+                    cur.execute(
+                        """
+                        UPDATE app_notifications
+                        SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP)
+                        WHERE notification_type = 'JOIN_APPROVAL'
+                          AND reference_type = 'community_join_requests'
+                          AND reference_id = %s
+                        """,
+                        (reference_id,),
+                    )
+                    return True
+
                 cur.execute(
                     """
                     UPDATE app_notifications

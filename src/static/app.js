@@ -8,6 +8,8 @@ const loginModal = document.getElementById("loginModal");
 const authError = document.getElementById("authError");
 let otpCountdownTimer = null;
 let otpCountdownRemaining = 20;
+let notificationRequest = null;
+let notificationLastLoadedAt = 0;
 
 const protectedViews = new Set(["vendors", "vendor_detail", "quotes", "groups", "group_detail", "leaderboard", "profile", "settings"]);
 const recentActivity = [
@@ -73,6 +75,112 @@ function escapeHtml(value = "") {
     .replaceAll("'", "&#039;");
 }
 
+function skeletonLine(width = "100%", extraClass = "") {
+  return `<span class="skeleton-line ${extraClass}" style="--skeleton-width: ${escapeHtml(width)}"></span>`;
+}
+
+function renderNotificationSkeleton(count = 3) {
+  return Array.from({ length: count }).map(() => `
+    <article class="notification-item notification-skeleton" aria-hidden="true">
+      <div class="skeleton-stack">
+        ${skeletonLine("64%")}
+        ${skeletonLine("92%", "skeleton-line--small")}
+        ${skeletonLine("48%", "skeleton-line--small")}
+      </div>
+      <div class="notification-actions">
+        <span class="skeleton-pill" style="--skeleton-width: 74px"></span>
+        <span class="skeleton-pill" style="--skeleton-width: 62px"></span>
+      </div>
+    </article>
+  `).join("");
+}
+
+function renderCommunityListSkeleton(count = 3) {
+  return Array.from({ length: count }).map(() => `
+    <article class="community-card community-card--skeleton" aria-hidden="true">
+      <span class="skeleton-avatar"></span>
+      <div class="skeleton-stack">
+        <div class="skeleton-row">
+          ${skeletonLine("38%")}
+          <span class="skeleton-pill" style="--skeleton-width: 76px"></span>
+        </div>
+        ${skeletonLine("84%", "skeleton-line--small")}
+        ${skeletonLine("28%", "skeleton-line--small")}
+      </div>
+    </article>
+  `).join("");
+}
+
+function renderCommunityDetailSkeleton() {
+  return `
+    <div class="community-detail-skeleton" aria-hidden="true">
+      <div class="panel__head">
+        <div class="skeleton-stack">
+          ${skeletonLine("28%")}
+          ${skeletonLine("62%", "skeleton-line--small")}
+        </div>
+        <span class="skeleton-pill" style="--skeleton-width: 62px"></span>
+      </div>
+      <div class="community-detail-meta">
+        <span class="skeleton-pill" style="--skeleton-width: 84px"></span>
+        <span class="skeleton-pill" style="--skeleton-width: 148px"></span>
+        <span class="skeleton-pill" style="--skeleton-width: 94px"></span>
+        <span class="skeleton-pill" style="--skeleton-width: 138px"></span>
+      </div>
+      <section class="community-join-form community-detail-skeleton__form">
+        ${skeletonLine("18%")}
+        <span class="skeleton-input"></span>
+        <div class="community-role-options">
+          <span class="skeleton-option"></span>
+          <span class="skeleton-option"></span>
+        </div>
+        <span class="skeleton-button"></span>
+      </section>
+    </div>
+  `;
+}
+
+function renderSettingsMembershipSkeleton(count = 2) {
+  return Array.from({ length: count }).map(() => `
+    <article class="settings-membership settings-membership--skeleton" aria-hidden="true">
+      <div class="skeleton-stack">
+        ${skeletonLine("42%")}
+        ${skeletonLine("64%", "skeleton-line--small")}
+      </div>
+      <span class="skeleton-pill" style="--skeleton-width: 132px"></span>
+    </article>
+  `).join("");
+}
+
+function renderLatencySkeleton() {
+  return `
+    <div class="latency-summary latency-summary--skeleton" aria-hidden="true">
+      ${Array.from({ length: 3 }).map(() => `
+        <article>
+          ${skeletonLine("44%")}
+          ${skeletonLine("62%", "skeleton-line--small")}
+        </article>
+      `).join("")}
+    </div>
+    <div class="latency-grid latency-grid--skeleton" aria-hidden="true">
+      ${Array.from({ length: 2 }).map(() => `
+        <div>
+          ${skeletonLine("32%")}
+          <div class="latency-table">
+            ${Array.from({ length: 4 }).map(() => `
+              <div class="latency-row latency-row--skeleton">
+                ${skeletonLine("58%")}
+                ${skeletonLine("44px")}
+                ${skeletonLine("76%", "skeleton-line--small")}
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
 function getUserDisplay() {
   const user = appState.currentUser;
   const userName = user?.full_name || user?.name || user?.email || "User";
@@ -99,7 +207,7 @@ function renderUserToolbar() {
           <strong>Notifications</strong>
         </div>
         <div id="notificationList" class="notification-list">
-          <div class="notification-empty">Loading notifications...</div>
+          ${renderNotificationSkeleton(3)}
         </div>
       </div>
     </div>
@@ -113,7 +221,9 @@ function renderUserToolbar() {
 
 function getHomeLine() {
   if (!isAuthed()) return "Browse the public HomeCircle dashboard";
+  if (!appState.userHomeLoaded) return null;
   const home = appState.userHome;
+  if (home?.status === "REJECTED") return "";
   if (home?.community?.name) {
     const parts = [home.community.name];
     if (home.villa_number) parts.push(home.villa_number);
@@ -125,6 +235,9 @@ function getHomeLine() {
 
 function renderHomeLine() {
   const line = getHomeLine();
+  if (line === null) {
+    return `<span class="home-line-skeleton" aria-label="Loading home details">${skeletonLine("210px", "skeleton-line--home")}</span>`;
+  }
   if (line) return escapeHtml(line);
   return `<button class="dashboard-home-link" type="button" data-go="community" data-open-community-form="true">Register your home today</button>`;
 }
@@ -161,12 +274,12 @@ function renderNotifications(notifications = []) {
         <p>${escapeHtml(notification.body || "")}</p>
       </div>
       <div class="notification-actions">
-        ${notification.type === "JOIN_APPROVAL" ? `
-          <button class="notification-action-btn" type="button" data-action="open-notification" data-action-url="${escapeHtml(notification.action_url || "")}">
+        ${!notification.read_at && notification.type === "JOIN_APPROVAL" ? `
+          <button class="notification-action-btn" type="button" data-action="open-notification" data-notification-id="${escapeHtml(notification.id)}" data-action-url="${escapeHtml(notification.action_url || "")}">
             Open
           </button>
         ` : ""}
-        ${notification.type !== "JOIN_APPROVAL" && notification.action_url ? `<button class="notification-link" type="button" data-action="open-notification" data-action-url="${escapeHtml(notification.action_url)}">Open</button>` : ""}
+        ${!notification.read_at && notification.type !== "JOIN_APPROVAL" && notification.action_url ? `<button class="notification-link" type="button" data-action="open-notification" data-notification-id="${escapeHtml(notification.id)}" data-action-url="${escapeHtml(notification.action_url)}">Open</button>` : ""}
         ${notification.read_at ? "" : `
           <button class="notification-link" type="button" data-action="mark-notification-read" data-notification-id="${escapeHtml(notification.id)}">
             Mark read
@@ -237,11 +350,14 @@ function renderPendingApprovals(requests = [], focusRequestId = "", members = []
   `;
 }
 
-async function loadNotifications() {
+async function loadNotifications({ force = false } = {}) {
   if (!isAuthed()) return;
+  const now = Date.now();
+  if (!force && notificationRequest) return notificationRequest;
+  if (!force && now - notificationLastLoadedAt < 5000) return;
   const badge = document.getElementById("notificationBadge");
   const list = document.getElementById("notificationList");
-  try {
+  notificationRequest = (async () => {
     const response = await fetch("/api/notifications");
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "Unable to load notifications");
@@ -250,8 +366,14 @@ async function loadNotifications() {
       badge.classList.toggle("hidden", !result.unread_count);
     }
     if (list) list.innerHTML = renderNotifications(result.notifications || []);
+    notificationLastLoadedAt = Date.now();
+  })();
+  try {
+    await notificationRequest;
   } catch (error) {
     if (list) list.innerHTML = `<div class="notification-empty">${escapeHtml(error.message)}</div>`;
+  } finally {
+    notificationRequest = null;
   }
 }
 
@@ -630,7 +752,7 @@ async function loadCommunityDetail(communityId, focusRequestId = "") {
   appState.focusJoinRequestId = focusRequestId || "";
   if (panel) {
     panel.classList.remove("hidden");
-    panel.innerHTML = `<div class="community-empty">Loading community details...</div>`;
+    panel.innerHTML = renderCommunityDetailSkeleton();
   }
   try {
     const response = await fetch(`/api/communities/${encodeURIComponent(communityId)}`);
@@ -664,7 +786,7 @@ function renderCommunityMatches(matches = []) {
 
 async function loadCommunities(search = "") {
   const list = document.getElementById("communityList");
-  if (list) list.innerHTML = `<div class="community-empty">Loading communities...</div>`;
+  if (list) list.innerHTML = renderCommunityListSkeleton(3);
   try {
     const response = await fetch(`/api/communities?q=${encodeURIComponent(search)}`);
     const result = await response.json();
@@ -724,7 +846,12 @@ function renderCommunity() {
 
       <section class="community-results">
         <div class="panel__head">
-          <h2>Registered communities</h2>
+          <div class="community-results-title">
+            <h2>Registered communities</h2>
+            <button class="community-add-btn" type="button" data-action="toggle-community-form" title="Register your community" aria-label="Register your community">
+              +
+            </button>
+          </div>
           <span>Newest first</span>
         </div>
         <div id="communityList" class="community-list"></div>
@@ -978,6 +1105,45 @@ function renderSettingsMemberships(memberships = []) {
   `).join("");
 }
 
+function renderLatencyDashboard(latency = {}) {
+  const endpoints = latency.endpoints || [];
+  const recent = latency.recent || [];
+  const slowest = latency.slowest || [];
+  return `
+    <div class="latency-summary">
+      <article><strong>${latency.sample_count || 0}</strong><span>Samples</span></article>
+      <article><strong>${endpoints.length}</strong><span>Endpoints</span></article>
+      <article><strong>${slowest[0]?.duration_ms || 0}ms</strong><span>Slowest</span></article>
+    </div>
+    <div class="latency-grid">
+      <div>
+        <h3>Endpoint summary</h3>
+        <div class="latency-table">
+          ${endpoints.length ? endpoints.map((item) => `
+            <div class="latency-row">
+              <span>${escapeHtml(item.endpoint)}</span>
+              <b>${escapeHtml(item.last_ms)}ms</b>
+              <small>avg ${escapeHtml(item.avg_ms)}ms • max ${escapeHtml(item.max_ms)}ms • ${escapeHtml(item.count)}x • ${escapeHtml(item.last_status)}</small>
+            </div>
+          `).join("") : `<div class="settings-empty">No API calls recorded yet.</div>`}
+        </div>
+      </div>
+      <div>
+        <h3>Recent calls</h3>
+        <div class="latency-table">
+          ${recent.length ? recent.slice(0, 12).map((item) => `
+            <div class="latency-row">
+              <span>${escapeHtml(item.method)} ${escapeHtml(item.path)}</span>
+              <b>${escapeHtml(item.duration_ms)}ms</b>
+              <small>${escapeHtml(item.status_code)}</small>
+            </div>
+          `).join("") : `<div class="settings-empty">No recent calls.</div>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderSettings() {
   const userDisplay = getUserDisplay();
   screen.innerHTML = `
@@ -991,7 +1157,7 @@ function renderSettings() {
           <p>Opt out of a community. This removes your membership and related member-owned community data through the schema cascades.</p>
         </div>
         <div id="settingsMemberships" class="settings-memberships">
-          <div class="settings-empty">Loading your communities...</div>
+          ${renderSettingsMembershipSkeleton(2)}
         </div>
       </section>
 
@@ -1006,6 +1172,17 @@ function renderSettings() {
           <input id="deleteMyDataConfirm" type="text" autocomplete="off" placeholder="DELETE" />
         </label>
         <button class="settings-danger-btn" type="button" data-action="delete-my-data">Delete my data</button>
+      </section>
+
+      <section id="founderLatencySection" class="settings-card settings-card--latency hidden">
+        <div>
+          <div class="kicker">Founder Health</div>
+          <h2>API latency dashboard</h2>
+          <p>End-to-end server timing for each outgoing browser API call into Flask. Samples reset when the service restarts.</p>
+        </div>
+        <div id="latencyDashboard">
+          ${renderLatencySkeleton()}
+        </div>
       </section>
 
       <section id="founderKillSection" class="settings-card settings-card--kill hidden">
@@ -1031,14 +1208,30 @@ function renderSettings() {
 async function loadSettings() {
   const memberships = document.getElementById("settingsMemberships");
   const founderKillSection = document.getElementById("founderKillSection");
+  const founderLatencySection = document.getElementById("founderLatencySection");
   try {
     const response = await fetch("/api/settings");
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "Unable to load settings");
     if (memberships) memberships.innerHTML = renderSettingsMemberships(result.settings?.memberships || []);
     founderKillSection?.classList.toggle("hidden", !result.settings?.is_founder);
+    founderLatencySection?.classList.toggle("hidden", !result.settings?.is_founder);
+    if (result.settings?.is_founder) loadLatencyDashboard();
   } catch (error) {
     if (memberships) memberships.innerHTML = `<div class="settings-error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function loadLatencyDashboard() {
+  const box = document.getElementById("latencyDashboard");
+  if (!box) return;
+  try {
+    const response = await fetch("/api/settings/latency");
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Unable to load latency dashboard");
+    box.innerHTML = renderLatencyDashboard(result.latency || {});
+  } catch (error) {
+    box.innerHTML = `<div class="settings-error">${escapeHtml(error.message)}</div>`;
   }
 }
 
@@ -1105,6 +1298,10 @@ screen.addEventListener("click", (event) => {
   }
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (action === "toggle-community-form") {
+    if (!isAuthed()) {
+      openLoginModal();
+      return;
+    }
     document.getElementById("communityRegister")?.classList.toggle("hidden");
     return;
   }
@@ -1114,7 +1311,7 @@ screen.addEventListener("click", (event) => {
   }
   if (action === "toggle-notifications") {
     document.getElementById("notificationPanel")?.classList.toggle("hidden");
-    loadNotifications();
+    loadNotifications({ force: true });
     return;
   }
   if (action === "mark-notification-read") {
@@ -1122,7 +1319,8 @@ screen.addEventListener("click", (event) => {
     return;
   }
   if (action === "open-notification") {
-    handleOpenNotification(event.target.closest("[data-action-url]")?.dataset.actionUrl);
+    const target = event.target.closest("[data-action-url]");
+    handleOpenNotification(target?.dataset.actionUrl || "", target?.dataset.notificationId || "");
     return;
   }
   if (action === "approve-join-request") {
@@ -1356,15 +1554,18 @@ async function handleLeaveCommunity(communityId) {
 async function handleMarkNotificationRead(notificationId) {
   if (!notificationId) return;
   const { response } = await postJson(`/api/notifications/${notificationId}/read`, {});
-  if (response.ok) loadNotifications();
+  if (response.ok) loadNotifications({ force: true });
 }
 
-function handleOpenNotification(actionUrl = "") {
+async function handleOpenNotification(actionUrl = "", notificationId = "") {
   if (!actionUrl) return;
   const url = new URL(actionUrl, window.location.origin);
   const communityId = url.searchParams.get("community_id");
   const joinRequestId = url.searchParams.get("join_request_id");
   document.getElementById("notificationPanel")?.classList.add("hidden");
+  if (notificationId) {
+    await handleMarkNotificationRead(notificationId);
+  }
   if (communityId) {
     pendingCommunitySearch = "";
     navigateToView("community");
@@ -1385,7 +1586,7 @@ async function handleApproveJoinRequest(requestId) {
     }
     return;
   }
-  await loadNotifications();
+  await loadNotifications({ force: true });
   const message = document.getElementById("communityApprovalMessage");
   if (message) {
     message.className = "community-form-message is-success";
@@ -1408,7 +1609,7 @@ async function handleRejectJoinRequest(requestId) {
     }
     return;
   }
-  await loadNotifications();
+  await loadNotifications({ force: true });
   if (message) {
     message.className = "community-form-message is-success";
     message.textContent = json.message || "Join request rejected";

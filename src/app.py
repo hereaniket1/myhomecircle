@@ -1,4 +1,5 @@
 import base64
+import atexit
 import hashlib
 import hmac
 import os
@@ -7,7 +8,8 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 import psycopg2
-from flask import Flask, jsonify, render_template, request, redirect, session, url_for
+from psycopg2.pool import ThreadedConnectionPool
+from flask import Flask, jsonify, render_template, request, redirect, session, url_for, g
 from authlib.integrations.flask_client import OAuth
 import resend
 try:
@@ -20,6 +22,7 @@ try:
         register_community,
     )
     from .settings_service import delete_my_data, get_settings_summary, leave_community, reset_all_data
+    from .latency_service import get_latency_dashboard, now_ms, record_api_latency
     from .notification_service import (
         approve_join_request,
         create_join_approval_notifications,
@@ -40,6 +43,7 @@ except ImportError:
         register_community,
     )
     from settings_service import delete_my_data, get_settings_summary, leave_community, reset_all_data
+    from latency_service import get_latency_dashboard, now_ms, record_api_latency
     from notification_service import (
         approve_join_request,
         create_join_approval_notifications,
@@ -55,6 +59,7 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.getenv("SECRET_KEY", "dev-only-change-me")
 app.config["DATABASE_URL"] = os.getenv("DATABASE_URL", "")
 oauth = OAuth(app)
+_db_pool = None
 
 google = oauth.register(
     name="google",
@@ -63,6 +68,25 @@ google = oauth.register(
     server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
     client_kwargs={"scope": "openid email profile"},
 )
+
+
+@app.before_request
+def start_api_latency_timer():
+    if request.path.startswith("/api/"):
+        g.api_latency_started_ms = now_ms()
+
+
+@app.after_request
+def record_api_latency_timer(response):
+    started_ms = getattr(g, "api_latency_started_ms", None)
+    if started_ms is not None:
+        record_api_latency(
+            method=request.method,
+            path=request.path,
+            status_code=response.status_code,
+            duration_ms=now_ms() - started_ms,
+        )
+    return response
 
 SPA_PAGES = [
     ("home", "Home"),
@@ -115,16 +139,73 @@ SPA_SECTIONS = {
     },
 }
 
+def _db_connect_kwargs():
+    return {
+        "host": os.getenv("DB_HOST"),
+        "port": os.getenv("DB_PORT") or os.getenv("DB_POST"),
+        "database": os.getenv("DB_ROYALTY_DATABASE_NAME"),
+        "user": os.getenv("DB_USER"),
+        "password": os.getenv("DB_PASSWORD"),
+        "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT", "10")),
+        "application_name": os.getenv("DB_APPLICATION_NAME", "myhomecircle"),
+    }
+
+
 def create_connection():
-    conn = psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT") or os.getenv("DB_POST"),
-        database=os.getenv("DB_ROYALTY_DATABASE_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
-    )
+    conn = psycopg2.connect(**_db_connect_kwargs())
     conn.autocommit = False
     return conn
+
+
+class PooledConnection:
+    def __init__(self, pool, conn):
+        self._pool = pool
+        self._conn = conn
+        self._closed = False
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    def close(self):
+        if self._closed:
+            return
+        try:
+            if self._conn.status != psycopg2.extensions.STATUS_READY:
+                self._conn.rollback()
+        finally:
+            self._pool.putconn(self._conn)
+            self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        if exc_type:
+            self.rollback()
+        else:
+            self.commit()
+        return False
+
+
+def get_db_pool():
+    global _db_pool
+    if _db_pool is None:
+        min_conn = int(os.getenv("DB_POOL_MIN_CONN", "1"))
+        max_conn = int(os.getenv("DB_POOL_MAX_CONN", "5"))
+        _db_pool = ThreadedConnectionPool(min_conn, max_conn, **_db_connect_kwargs())
+    return _db_pool
+
+
+@atexit.register
+def close_db_pool():
+    if _db_pool is not None:
+        _db_pool.closeall()
 
 
 def _run_query(query, params=(), fetch=False, fetchall=False, returning=False):
@@ -150,7 +231,10 @@ def _run_query(query, params=(), fetch=False, fetchall=False, returning=False):
 
 
 def db_conn():
-    return create_connection()
+    pool = get_db_pool()
+    conn = pool.getconn()
+    conn.autocommit = False
+    return PooledConnection(pool, conn)
 
 
 def fetch_one(query, params=()):
@@ -332,7 +416,8 @@ def me_home():
 
 @app.get("/api/login-status")
 def login_status():
-    return jsonify(authed=bool(current_user()), user=current_user())
+    user = current_user()
+    return jsonify(authed=bool(user), user=user)
 
 
 @app.get("/api/notifications")
@@ -411,6 +496,17 @@ def api_settings():
     if not user:
         return jsonify(error="Login is required"), 401
     return jsonify(ok=True, settings=get_settings_summary(db_conn, user))
+
+
+@app.get("/api/settings/latency")
+def api_settings_latency():
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required"), 401
+    settings = get_settings_summary(db_conn, user)
+    if not settings.get("is_founder"):
+        return jsonify(error="Founder access required"), 403
+    return jsonify(ok=True, latency=get_latency_dashboard())
 
 
 @app.post("/api/settings/leave-community")
