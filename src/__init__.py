@@ -1,0 +1,1 @@
+"""MyHomeCircle Flask application package."""

@@ -10,25 +10,46 @@ import psycopg2
 from flask import Flask, jsonify, render_template, request, redirect, session, url_for
 from authlib.integrations.flask_client import OAuth
 import resend
-from community_service import (
-    find_existing_communities,
-    get_community_detail,
-    get_user_home_summary,
-    join_community,
-    list_communities,
-    register_community,
-)
-from settings_service import delete_my_data, get_settings_summary, leave_community, reset_all_data
-from notification_service import (
-    approve_join_request,
-    create_join_approval_notifications,
-    get_join_request_admin_context,
-    list_pending_join_requests,
-    list_notifications,
-    mark_notification_read,
-    promote_member_to_admin,
-    reject_join_request,
-)
+try:
+    from .community_service import (
+        find_existing_communities,
+        get_community_detail,
+        get_user_home_summary,
+        join_community,
+        list_communities,
+        register_community,
+    )
+    from .settings_service import delete_my_data, get_settings_summary, leave_community, reset_all_data
+    from .notification_service import (
+        approve_join_request,
+        create_join_approval_notifications,
+        get_join_request_admin_context,
+        list_pending_join_requests,
+        list_notifications,
+        mark_notification_read,
+        promote_member_to_admin,
+        reject_join_request,
+    )
+except ImportError:
+    from community_service import (
+        find_existing_communities,
+        get_community_detail,
+        get_user_home_summary,
+        join_community,
+        list_communities,
+        register_community,
+    )
+    from settings_service import delete_my_data, get_settings_summary, leave_community, reset_all_data
+    from notification_service import (
+        approve_join_request,
+        create_join_approval_notifications,
+        get_join_request_admin_context,
+        list_pending_join_requests,
+        list_notifications,
+        mark_notification_read,
+        promote_member_to_admin,
+        reject_join_request,
+    )
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.secret_key = os.getenv("SECRET_KEY", "dev-only-change-me")
