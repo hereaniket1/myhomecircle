@@ -193,7 +193,14 @@ function renderPendingApprovals(requests = [], focusRequestId = "", members = []
                   <strong>${escapeHtml(member.requester_name)}</strong>
                   <span>${escapeHtml(member.requester_email)} • ${escapeHtml(member.villa_number || "No villa")}</span>
                 </div>
-                <div class="community-member-status">${escapeHtml(member.role)} • ${escapeHtml(member.status)}</div>
+                <div class="community-approval-actions">
+                  <div class="community-member-status">${escapeHtml(member.role)} • ${escapeHtml(member.status)}</div>
+                  ${member.status === "ACTIVE" && member.role !== "ADMIN" ? `
+                    <button class="notification-action-btn" type="button" data-action="promote-member-admin" data-member-id="${escapeHtml(member.id)}">
+                      Make admin
+                    </button>
+                  ` : ""}
+                </div>
               </article>
             `).join("")}
           </div>
@@ -1126,6 +1133,10 @@ screen.addEventListener("click", (event) => {
     handleRejectJoinRequest(event.target.closest("[data-request-id]")?.dataset.requestId);
     return;
   }
+  if (action === "promote-member-admin") {
+    handlePromoteMemberAdmin(event.target.closest("[data-member-id]")?.dataset.memberId);
+    return;
+  }
   if (action === "leave-community") {
     handleLeaveCommunity(event.target.closest("[data-community-id]")?.dataset.communityId);
     return;
@@ -1406,6 +1417,24 @@ async function handleRejectJoinRequest(requestId) {
     loadCommunities(pendingCommunitySearch);
     if (appState.currentCommunityId) loadCommunityDetail(appState.currentCommunityId);
   }
+}
+
+async function handlePromoteMemberAdmin(memberId) {
+  if (!memberId) return;
+  const { response, json } = await postJson(`/api/community-members/${memberId}/promote-admin`, {});
+  const message = document.getElementById("communityApprovalMessage");
+  if (!response.ok) {
+    if (message) {
+      message.className = "community-form-message is-error";
+      message.textContent = json.error || "Unable to promote member";
+    }
+    return;
+  }
+  if (message) {
+    message.className = "community-form-message is-success";
+    message.textContent = json.message || "Member promoted to admin";
+  }
+  if (appState.currentCommunityId) loadCommunityDetail(appState.currentCommunityId);
 }
 
 async function handleDeleteMyData() {

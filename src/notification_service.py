@@ -521,3 +521,48 @@ def reject_join_request(db_conn, join_request_id, admin_user_id):
         return {"already_rejected": False}
     finally:
         conn.close()
+
+
+def promote_member_to_admin(db_conn, member_id, admin_user_id):
+    conn = db_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        target.id,
+                        target.community_id,
+                        target.role,
+                        target.status
+                    FROM community_members target
+                    JOIN community_members admin_member
+                        ON admin_member.community_id = target.community_id
+                        AND admin_member.app_user_id = %s
+                        AND admin_member.role = 'ADMIN'
+                        AND admin_member.status = 'ACTIVE'
+                    WHERE target.id = %s
+                    """,
+                    (admin_user_id, member_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise PermissionError("Only an active community admin can promote members")
+                _target_id, _community_id, role, status = row
+                if role == "ADMIN":
+                    return {"already_admin": True}
+                if status != "ACTIVE":
+                    raise ValueError("Only active members can be promoted to admin")
+
+                cur.execute(
+                    """
+                    UPDATE community_members
+                    SET role = 'ADMIN',
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                    """,
+                    (member_id,),
+                )
+        return {"already_admin": False}
+    finally:
+        conn.close()

@@ -26,6 +26,7 @@ from notification_service import (
     list_pending_join_requests,
     list_notifications,
     mark_notification_read,
+    promote_member_to_admin,
     reject_join_request,
 )
 
@@ -357,6 +358,20 @@ def api_join_request_reject(request_id):
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     return jsonify(ok=True, message="Join request rejected", **result)
+
+
+@app.post("/api/community-members/<member_id>/promote-admin")
+def api_promote_member_admin(member_id):
+    user = current_user()
+    if not user:
+        return jsonify(error="Login is required"), 401
+    try:
+        result = promote_member_to_admin(db_conn, member_id, user["id"])
+    except PermissionError as exc:
+        return jsonify(error=str(exc)), 403
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(ok=True, message="Member promoted to admin", **result)
 
 
 @app.get("/approve/join/<request_id>")
