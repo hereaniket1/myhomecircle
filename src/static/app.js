@@ -211,10 +211,10 @@ function renderUserToolbar() {
         </div>
       </div>
     </div>
-    <div class="dashboard-user-chip" title="${safeUserName}">
+    <button class="dashboard-user-chip" type="button" data-go="profile" title="${safeUserName}">
       <span>${escapeHtml(userDisplay.initial)}</span>
       <strong>${safeUserName}</strong>
-    </div>
+    </button>
     <a class="dashboard-auth-btn dashboard-auth-btn--ghost" href="/logout">Logout</a>
   `;
 }
@@ -652,17 +652,27 @@ function renderCommunityList(communities = []) {
   }).join("");
 }
 
-function renderCommunityDetail(community) {
-  const panel = document.getElementById("communityDetail");
-  if (!panel) return;
+function renderCommunityDetailBody(community, mode = "member", closeAction = "close-community-detail") {
   const member = community.current_member;
+  const showMemberTools = mode === "member";
+  const showCommunityAction = mode === "browse" && isAuthed();
   const canChooseAdmin = Boolean(community.can_choose_admin);
   const address = communityAddressLine(community.address);
   const memberState = member
-    ? `<div class="community-join-state">You are already registered as <strong>${escapeHtml(member.role)}</strong> with status <strong>${escapeHtml(member.status)}</strong>.</div>`
+    ? `
+      <div class="community-join-state ${mode === "browse" ? "community-join-state--compact" : ""}">
+        <span class="community-member-check">✓</span>
+        <span>You are a member as <strong>${escapeHtml(member.role)}</strong> with status <strong>${escapeHtml(member.status)}</strong>.</span>
+        ${showMemberTools && member.role !== "ADMIN" ? `
+          <button class="settings-danger-btn settings-danger-btn--ghost" type="button" data-action="leave-community" data-community-id="${escapeHtml(community.id)}">
+            Leave community
+          </button>
+        ` : ""}
+      </div>
+    `
     : "";
   const joinForm = member ? "" : `
-    <form class="community-join-form" id="communityJoinForm" data-community-id="${escapeHtml(community.id)}">
+    <form class="community-join-form hidden" id="communityJoinForm" data-community-id="${escapeHtml(community.id)}" data-detail-mode="${escapeHtml(mode)}">
       <label>
         <span>Villa / flat number</span>
         <input name="villa_number" required placeholder="Villa 300" />
@@ -703,12 +713,19 @@ function renderCommunityDetail(community) {
       <div id="communityJoinMessage" class="community-form-message"></div>
     </form>
   `;
+  const joinPrompt = !member && showCommunityAction ? `
+    <div class="community-join-state community-join-state--compact">
+      <span>Not linked to your profile yet.</span>
+      <button class="notification-action-btn" type="button" data-action="show-community-join-form">
+        Join community
+      </button>
+    </div>
+  ` : "";
 
-  panel.classList.remove("hidden");
-  panel.innerHTML = `
+  return `
     <div class="panel__head">
       <h2>${escapeHtml(community.name)}</h2>
-      <button class="link-btn" type="button" data-action="close-community-detail">Close</button>
+      <button class="link-btn" type="button" data-action="${escapeHtml(closeAction)}">Close</button>
     </div>
     <p>${escapeHtml(address)}</p>
     <div class="community-detail-meta">
@@ -717,15 +734,28 @@ function renderCommunityDetail(community) {
       <span>${community.active_admin_count || 0} admins</span>
       <span>Approval ${community.settings?.require_admin_approval ? "enabled" : "disabled"}</span>
     </div>
-    <div id="communityPendingApprovals"></div>
-    ${isAuthed() ? memberState + joinForm : `
+    ${mode === "browse" ? memberState + joinPrompt + joinForm : ""}
+    ${mode === "member" ? `<div id="communityPendingApprovals"></div>` : ""}
+    ${mode === "browse" ? `
+      <div class="community-overview-panel">
+        <h3>Community details</h3>
+        <p>Vendor details and ongoing campaign information will appear here as this community grows.</p>
+      </div>
+    ` : isAuthed() ? memberState + joinForm.replace('class="community-join-form hidden"', 'class="community-join-form"') : `
       <div class="community-join-state">
         Login to request registration in this community.
         <button class="dashboard-auth-btn" type="button" data-action="open-login">Signup/Login</button>
       </div>
     `}
   `;
-  loadPendingApprovals(community.id, appState.focusJoinRequestId || "");
+}
+
+function renderCommunityDetail(community, mode = "member") {
+  const panel = document.getElementById("communityDetail");
+  if (!panel) return;
+  panel.classList.remove("hidden");
+  panel.innerHTML = renderCommunityDetailBody(community, mode, "close-community-detail");
+  if (mode === "member") loadPendingApprovals(community.id, appState.focusJoinRequestId || "");
   appState.focusJoinRequestId = "";
   panel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -746,7 +776,7 @@ async function loadPendingApprovals(communityId, focusRequestId = "") {
   }
 }
 
-async function loadCommunityDetail(communityId, focusRequestId = "") {
+async function loadCommunityDetail(communityId, focusRequestId = "", mode = "member") {
   const panel = document.getElementById("communityDetail");
   appState.currentCommunityId = communityId;
   appState.focusJoinRequestId = focusRequestId || "";
@@ -758,7 +788,35 @@ async function loadCommunityDetail(communityId, focusRequestId = "") {
     const response = await fetch(`/api/communities/${encodeURIComponent(communityId)}`);
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "Unable to load community");
-    renderCommunityDetail(result.community);
+    renderCommunityDetail(result.community, mode);
+  } catch (error) {
+    if (panel) panel.innerHTML = `<div class="community-error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderProfileCommunityDetail(community) {
+  const panel = document.getElementById("profileCommunityDetail");
+  if (!panel) return;
+  panel.classList.remove("hidden");
+  panel.innerHTML = renderCommunityDetailBody(community, "member", "close-profile-community-detail");
+  loadPendingApprovals(community.id, appState.focusJoinRequestId || "");
+  appState.focusJoinRequestId = "";
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function loadProfileCommunityDetail(communityId, focusRequestId = "") {
+  const panel = document.getElementById("profileCommunityDetail");
+  appState.currentProfileCommunityId = communityId;
+  appState.focusJoinRequestId = focusRequestId || "";
+  if (panel) {
+    panel.classList.remove("hidden");
+    panel.innerHTML = renderCommunityDetailSkeleton();
+  }
+  try {
+    const response = await fetch(`/api/communities/${encodeURIComponent(communityId)}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Unable to load community");
+    renderProfileCommunityDetail(result.community);
   } catch (error) {
     if (panel) panel.innerHTML = `<div class="community-error">${escapeHtml(error.message)}</div>`;
   }
@@ -1066,11 +1124,15 @@ function renderLeaderboard() {
 }
 
 function renderProfile() {
+  const userDisplay = getUserDisplay();
+  const safeName = escapeHtml(userDisplay.name);
+  const safeEmail = escapeHtml(appState.currentUser?.email || "");
   screen.innerHTML = `
     <section class="profile-page">
       <div class="profile-hero">
-        <div class="profile-avatar">A</div>
-        <h1>Aniket Pathak</h1>
+        <div class="profile-avatar">${escapeHtml(userDisplay.initial)}</div>
+        <h1>${safeName}</h1>
+        ${safeEmail ? `<p>${safeEmail}</p>` : ""}
         <div class="profile-badge">Gold Member</div>
       </div>
       <div class="profile-metrics">
@@ -1079,30 +1141,51 @@ function renderProfile() {
         <div><strong>15</strong><span>Quotes</span></div>
         <div><strong>3</strong><span>Group Buys</span></div>
       </div>
-      <div class="menu-list">
-        ${["My Activity", "My Quotes", "My Reviews", "My Group Buys", "Settings", "Logout"]
-          .map((item) => `<button class="menu-item">${item}<span>›</span></button>`)
-          .join("")}
-      </div>
+      <section class="profile-card">
+        <div class="panel__head">
+          <h2>My communities</h2>
+          <span>Linked to your profile</span>
+        </div>
+        <div id="profileMemberships" class="settings-memberships">
+          ${renderSettingsMembershipSkeleton(2)}
+        </div>
+      </section>
+      <section class="profile-community-detail hidden" id="profileCommunityDetail"></section>
     </section>
   `;
+  loadProfileMemberships();
 }
 
-function renderSettingsMemberships(memberships = []) {
+function renderProfileMemberships(memberships = []) {
   if (!memberships.length) {
     return `<div class="settings-empty">You are not registered in any community yet.</div>`;
   }
   return memberships.map((membership) => `
-    <article class="settings-membership">
-      <div>
+    <article class="settings-membership profile-membership" data-profile-community-id="${escapeHtml(membership.community_id)}">
+      <button class="profile-membership__main" type="button" data-profile-community-id="${escapeHtml(membership.community_id)}">
         <strong>${escapeHtml(membership.community_name)}</strong>
         <span>${escapeHtml(membership.villa_number || "No villa number")} • ${escapeHtml(membership.role)} • ${escapeHtml(membership.status)}</span>
-      </div>
-      <button class="settings-danger-btn settings-danger-btn--ghost" type="button" data-action="leave-community" data-community-id="${escapeHtml(membership.community_id)}">
-        Leave community
       </button>
+      ${membership.role !== "ADMIN" ? `
+        <button class="settings-danger-btn settings-danger-btn--ghost" type="button" data-action="leave-community" data-community-id="${escapeHtml(membership.community_id)}">
+          Leave community
+        </button>
+      ` : ""}
     </article>
   `).join("");
+}
+
+async function loadProfileMemberships() {
+  const memberships = document.getElementById("profileMemberships");
+  if (!memberships) return;
+  try {
+    const response = await fetch("/api/settings");
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Unable to load profile");
+    memberships.innerHTML = renderProfileMemberships(result.settings?.memberships || []);
+  } catch (error) {
+    memberships.innerHTML = `<div class="settings-error">${escapeHtml(error.message)}</div>`;
+  }
 }
 
 function renderLatencyDashboard(latency = {}) {
@@ -1150,17 +1233,6 @@ function renderSettings() {
     <section class="settings-page">
       ${renderDashboardHeader({ title: `Settings for ${escapeHtml(userDisplay.firstName)}` })}
 
-      <section class="settings-card">
-        <div>
-          <div class="kicker">Community Access</div>
-          <h2>Your communities</h2>
-          <p>Opt out of a community. This removes your membership and related member-owned community data through the schema cascades.</p>
-        </div>
-        <div id="settingsMemberships" class="settings-memberships">
-          ${renderSettingsMembershipSkeleton(2)}
-        </div>
-      </section>
-
       <section class="settings-card settings-card--danger">
         <div>
           <div class="kicker">My Data</div>
@@ -1206,19 +1278,17 @@ function renderSettings() {
 }
 
 async function loadSettings() {
-  const memberships = document.getElementById("settingsMemberships");
   const founderKillSection = document.getElementById("founderKillSection");
   const founderLatencySection = document.getElementById("founderLatencySection");
   try {
     const response = await fetch("/api/settings");
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "Unable to load settings");
-    if (memberships) memberships.innerHTML = renderSettingsMemberships(result.settings?.memberships || []);
     founderKillSection?.classList.toggle("hidden", !result.settings?.is_founder);
     founderLatencySection?.classList.toggle("hidden", !result.settings?.is_founder);
     if (result.settings?.is_founder) loadLatencyDashboard();
   } catch (error) {
-    if (memberships) memberships.innerHTML = `<div class="settings-error">${escapeHtml(error.message)}</div>`;
+    setSettingsMessage(error.message, true);
   }
 }
 
@@ -1309,6 +1379,17 @@ screen.addEventListener("click", (event) => {
     document.getElementById("communityDetail")?.classList.add("hidden");
     return;
   }
+  if (action === "close-profile-community-detail") {
+    document.getElementById("profileCommunityDetail")?.classList.add("hidden");
+    appState.currentProfileCommunityId = null;
+    return;
+  }
+  if (action === "show-community-join-form") {
+    const form = event.target.closest(".community-detail, .profile-community-detail")?.querySelector("#communityJoinForm");
+    form?.classList.remove("hidden");
+    form?.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
   if (action === "toggle-notifications") {
     document.getElementById("notificationPanel")?.classList.toggle("hidden");
     loadNotifications({ force: true });
@@ -1350,7 +1431,13 @@ screen.addEventListener("click", (event) => {
 
   const communityCard = event.target.closest("[data-community-card-id]");
   if (communityCard) {
-    loadCommunityDetail(communityCard.dataset.communityCardId);
+    loadCommunityDetail(communityCard.dataset.communityCardId, "", "browse");
+    return;
+  }
+
+  const profileCommunity = event.target.closest("[data-profile-community-id]");
+  if (profileCommunity) {
+    loadProfileCommunityDetail(profileCommunity.dataset.profileCommunityId);
     return;
   }
 
@@ -1425,7 +1512,13 @@ screen.addEventListener("submit", async (event) => {
       message.textContent = json.message || "Community registration submitted.";
     }
     refreshUserHome();
-    loadCommunityDetail(joinForm.dataset.communityId);
+    const detailMode = joinForm.dataset.detailMode || "member";
+    if (appState.currentView === "profile") {
+      loadProfileMemberships();
+      loadProfileCommunityDetail(joinForm.dataset.communityId);
+      return;
+    }
+    loadCommunityDetail(joinForm.dataset.communityId, "", detailMode);
     return;
   }
 
@@ -1548,7 +1641,17 @@ async function handleLeaveCommunity(communityId) {
   }
   setSettingsMessage(json.message || "You have left this community");
   refreshUserHome();
-  loadSettings();
+  loadProfileMemberships();
+  if (appState.currentView === "profile") {
+    if (appState.currentProfileCommunityId === communityId) {
+      document.getElementById("profileCommunityDetail")?.classList.add("hidden");
+      appState.currentProfileCommunityId = null;
+    }
+    return;
+  }
+  if (appState.currentCommunityId) {
+    loadCommunityDetail(appState.currentCommunityId, "", "member");
+  }
 }
 
 async function handleMarkNotificationRead(notificationId) {
@@ -1569,7 +1672,7 @@ async function handleOpenNotification(actionUrl = "", notificationId = "") {
   if (communityId) {
     pendingCommunitySearch = "";
     navigateToView("community");
-    window.setTimeout(() => loadCommunityDetail(communityId, joinRequestId || ""), 0);
+    window.setTimeout(() => loadCommunityDetail(communityId, joinRequestId || "", "member"), 0);
     return;
   }
   window.location.href = url.toString();
@@ -1596,6 +1699,10 @@ async function handleApproveJoinRequest(requestId) {
     loadCommunities(pendingCommunitySearch);
     if (appState.currentCommunityId) loadCommunityDetail(appState.currentCommunityId);
   }
+  if (appState.currentView === "profile" && appState.currentProfileCommunityId) {
+    loadProfileMemberships();
+    loadProfileCommunityDetail(appState.currentProfileCommunityId);
+  }
 }
 
 async function handleRejectJoinRequest(requestId) {
@@ -1618,6 +1725,10 @@ async function handleRejectJoinRequest(requestId) {
     loadCommunities(pendingCommunitySearch);
     if (appState.currentCommunityId) loadCommunityDetail(appState.currentCommunityId);
   }
+  if (appState.currentView === "profile" && appState.currentProfileCommunityId) {
+    loadProfileMemberships();
+    loadProfileCommunityDetail(appState.currentProfileCommunityId);
+  }
 }
 
 async function handlePromoteMemberAdmin(memberId) {
@@ -1634,6 +1745,11 @@ async function handlePromoteMemberAdmin(memberId) {
   if (message) {
     message.className = "community-form-message is-success";
     message.textContent = json.message || "Member promoted to admin";
+  }
+  if (appState.currentView === "profile" && appState.currentProfileCommunityId) {
+    loadProfileMemberships();
+    loadProfileCommunityDetail(appState.currentProfileCommunityId);
+    return;
   }
   if (appState.currentCommunityId) loadCommunityDetail(appState.currentCommunityId);
 }

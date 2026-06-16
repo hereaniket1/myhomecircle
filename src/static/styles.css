@@ -666,7 +666,8 @@ h1 {
 
 .community-results,
 .community-detail,
-.community-register {
+.community-register,
+.profile-community-detail {
   border: 1px solid var(--stroke);
   border-radius: 18px;
   background: #ffffff;
@@ -675,7 +676,8 @@ h1 {
 
 .community-register,
 .community-detail,
-.community-results {
+.community-results,
+.profile-community-detail {
   padding: 22px;
 }
 
@@ -879,6 +881,23 @@ h1 {
   font-weight: 900;
 }
 
+.community-overview-panel {
+  padding: 18px;
+  border: 1px solid rgba(7, 148, 71, 0.16);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f7fcf9, #ffffff);
+}
+
+.community-overview-panel h3,
+.community-overview-panel p {
+  margin: 0;
+}
+
+.community-overview-panel p {
+  margin-top: 6px;
+  color: var(--soft-text);
+}
+
 @keyframes skeleton-shimmer {
   0% {
     background-position: 120% 0;
@@ -987,6 +1006,26 @@ h1 {
   border-radius: 16px;
   background: #fbfdfc;
   color: var(--soft-text);
+}
+
+.community-join-state--compact {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  border-color: rgba(7, 148, 71, 0.18);
+  background: linear-gradient(180deg, #f7fcf9, #ffffff);
+}
+
+.community-member-check {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--green);
+  color: #ffffff;
+  font-weight: 900;
 }
 
 .community-join-form {
@@ -1348,6 +1387,35 @@ h1 {
 }
 .profile-metrics strong { display: block; font-size: 1.4rem; letter-spacing: 0; }
 .profile-metrics span { display: block; color: var(--muted); }
+.profile-card {
+  padding: 18px;
+  border: 1px solid var(--stroke);
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: var(--panel-shadow);
+}
+
+.profile-membership {
+  align-items: stretch;
+}
+
+.profile-membership__main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.profile-membership__main:hover strong {
+  color: var(--green-dark);
+}
+
 .menu-item {
   display: flex;
   justify-content: space-between;
@@ -2266,6 +2334,15 @@ body {
   background: #ffffff;
   box-shadow: var(--panel-shadow);
   color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.dashboard-user-chip:hover {
+  border-color: rgba(7, 148, 71, 0.28);
+  box-shadow: 0 14px 30px rgba(16, 24, 40, 0.08);
+  transform: translateY(-1px);
 }
 
 .dashboard-user-chip span {

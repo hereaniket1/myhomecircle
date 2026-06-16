@@ -50,6 +50,7 @@ def get_settings_summary(db_conn, user):
                 FROM community_members cm
                 JOIN communities c ON c.id = cm.community_id
                 WHERE cm.app_user_id = %s
+                  AND cm.status IN ('ACTIVE', 'PENDING')
                 ORDER BY cm.created_at DESC
                 """,
                 (user["id"],),
